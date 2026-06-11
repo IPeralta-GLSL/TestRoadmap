@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { TbX, TbFileText, TbPalette, TbLink, TbTrash } from 'react-icons/tb';
+import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto } from 'react-icons/tb';
 import { Task } from './types/Task';
 import { addDays, format, parseISO, differenceInDays, startOfWeek, isSameDay } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -58,6 +58,8 @@ interface DetailModalState {
   taskId: number;
 }
 
+const MAX_HISTORY = 50;
+
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [viewStart] = useState(() => {
@@ -77,6 +79,10 @@ export default function App() {
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const dragStartRef = useRef<{ x: number; y: number; time: number; button: number } | null>(null);
 
+  const [history, setHistory] = useState<Task[][]>([[]]);
+  const [historyIdx, setHistoryIdx] = useState(0);
+  const isUndoRedoRef = useRef(false);
+
   const numDays = 60;
 
   const fetchTasks = useCallback(async () => {
@@ -84,23 +90,30 @@ export default function App() {
       const res = await fetch(`${API_URL}/tasks`);
       const data: Task[] = await res.json();
       setTasks(data);
+      if (!isUndoRedoRef.current) {
+        setHistory(prev => {
+          const newHist = [...prev.slice(0, historyIdx + 1), data];
+          if (newHist.length > MAX_HISTORY) newHist.shift();
+          return newHist;
+        });
+        setHistoryIdx(prev => Math.min(prev + 1, MAX_HISTORY - 1));
+      }
+      isUndoRedoRef.current = false;
     } catch (err) {
       console.error('Error fetching tasks:', err);
     }
-  }, []);
+  }, [historyIdx]);
 
   useEffect(() => {
     fetchTasks();
-  }, [fetchTasks]);
+  }, []);
 
   useEffect(() => {
     const socket: Socket = io(window.location.origin, {
       path: '/socket.io',
     });
 
-    socket.on('connect', () => {
-      console.log('Connected to server');
-    });
+    socket.on('connect', () => {});
 
     socket.on('task-created', (task: Task) => {
       setTasks((prev) => {
@@ -149,8 +162,10 @@ export default function App() {
           estimate: '',
           color: '#4caf50',
           status: 'pendiente',
+          notes: '',
         }),
       });
+      await fetchTasks();
     } catch (err) {
       console.error('Error creating task:', err);
     }
@@ -159,6 +174,7 @@ export default function App() {
   const deleteTask = async (id: number) => {
     try {
       await fetch(`${API_URL}/tasks/${id}`, { method: 'DELETE' });
+      await fetchTasks();
     } catch (err) {
       console.error('Error deleting task:', err);
     }
@@ -174,6 +190,7 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
       });
+      await fetchTasks();
     } catch (err) {
       console.error('Error updating task:', err);
     }
@@ -189,6 +206,94 @@ export default function App() {
       await fetchTasks();
     } catch (err) {
       console.error('Error adding dependency:', err);
+    }
+  };
+
+  const handleUndo = async () => {
+    if (historyIdx <= 0) return;
+    const prevIdx = historyIdx - 1;
+    const prevTasks = history[prevIdx];
+    if (!prevTasks) return;
+    isUndoRedoRef.current = true;
+    setHistoryIdx(prevIdx);
+    setTasks(prevTasks);
+    try {
+      for (const task of tasks) {
+        const existsInPrev = prevTasks.find(t => t.id === task.id);
+        if (!existsInPrev) {
+          await fetch(`${API_URL}/tasks/${task.id}`, { method: 'DELETE' });
+        }
+      }
+      for (const pt of prevTasks) {
+        const currentTask = tasks.find(t => t.id === pt.id);
+        if (!currentTask) {
+          await fetch(`${API_URL}/tasks`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(pt),
+          });
+        } else if (
+          currentTask.name !== pt.name ||
+          currentTask.start_date !== pt.start_date ||
+          currentTask.end_date !== pt.end_date ||
+          currentTask.color !== pt.color ||
+          currentTask.status !== pt.status ||
+          currentTask.estimate !== pt.estimate
+        ) {
+          await fetch(`${API_URL}/tasks/${pt.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(pt),
+          });
+        }
+      }
+      await fetchTasks();
+    } catch (err) {
+      console.error('Error during undo:', err);
+    }
+  };
+
+  const handleRedo = async () => {
+    if (historyIdx >= history.length - 1) return;
+    const nextIdx = historyIdx + 1;
+    const nextTasks = history[nextIdx];
+    if (!nextTasks) return;
+    isUndoRedoRef.current = true;
+    setHistoryIdx(nextIdx);
+    setTasks(nextTasks);
+    try {
+      for (const task of tasks) {
+        const existsInNext = nextTasks.find(t => t.id === task.id);
+        if (!existsInNext) {
+          await fetch(`${API_URL}/tasks/${task.id}`, { method: 'DELETE' });
+        }
+      }
+      for (const nt of nextTasks) {
+        const currentTask = tasks.find(t => t.id === nt.id);
+        if (!currentTask) {
+          await fetch(`${API_URL}/tasks`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(nt),
+          });
+        } else if (
+          currentTask.name !== nt.name ||
+          currentTask.start_date !== nt.start_date ||
+          currentTask.end_date !== nt.end_date ||
+          currentTask.color !== nt.color ||
+          currentTask.status !== nt.status ||
+          currentTask.estimate !== nt.estimate
+        ) {
+          await fetch(`${API_URL}/tasks/${nt.id}`, {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(nt),
+          });
+        }
+      }
+      await fetchTasks();
+    } catch (err) {
+      console.error('Error during redo:', err);
     }
   };
 
@@ -234,23 +339,23 @@ export default function App() {
       setDragDelta(delta);
     };
 
-      const handleMouseUp = () => {
-        if (dragStartRef.current) {
-          const elapsed = Date.now() - dragStartRef.current.time;
-          const button = dragStartRef.current.button;
-          dragStartRef.current = null;
+    const handleMouseUp = () => {
+      if (dragStartRef.current) {
+        const elapsed = Date.now() - dragStartRef.current.time;
+        const button = dragStartRef.current.button;
+        dragStartRef.current = null;
 
-          if (elapsed < 200 && Math.abs(dragDelta) < 3 && button === 0) {
-            if (linkMode) {
-              if (linkMode.fromTaskId !== dragging.taskId) {
-                addDependency(dragging.taskId, linkMode.fromTaskId);
-              }
-              setLinkMode(null);
-            } else {
-              setDetailModal({ taskId: dragging.taskId });
+        if (elapsed < 200 && Math.abs(dragDelta) < 3 && button === 0) {
+          if (linkMode) {
+            if (linkMode.fromTaskId !== dragging.taskId) {
+              addDependency(dragging.taskId, linkMode.fromTaskId);
             }
+            setLinkMode(null);
+          } else {
+            setDetailModal({ taskId: dragging.taskId });
           }
         }
+      }
 
       const daysDelta = Math.round(dragDelta / dayWidth);
       if (daysDelta !== 0 && dragging) {
@@ -321,7 +426,18 @@ export default function App() {
     return task.dependencies.some(depId => {
       const depTask = tasks.find(t => t.id === depId);
       if (!depTask) return false;
-      return parseISO(task.start_date) < parseISO(depTask.end_date);
+      const taskStart = parseISO(task.start_date);
+      const depEnd = parseISO(depTask.end_date);
+      return taskStart < depEnd;
+    });
+  };
+
+  const getSameDayDeps = (task: Task): number[] => {
+    if (!task.dependencies || task.dependencies.length === 0) return [];
+    return task.dependencies.filter(depId => {
+      const depTask = tasks.find(t => t.id === depId);
+      if (!depTask) return false;
+      return task.start_date === depTask.end_date;
     });
   };
 
@@ -330,8 +446,8 @@ export default function App() {
       const startIdx = getDayIndex(task.start_date, viewStart);
       const endIdx = getDayIndex(task.end_date, viewStart);
       const duration = endIdx - startIdx;
-      const left = startIdx * dayWidth;
-      const width = Math.max(duration * dayWidth, dayWidth);
+      let left = startIdx * dayWidth;
+      let width = Math.max(duration * dayWidth, dayWidth);
 
       let currentLeft = left;
       let currentWidth = width;
@@ -350,16 +466,31 @@ export default function App() {
         }
       }
 
+      const sameDayDeps = getSameDayDeps(task);
       const taskIndex = tasks.indexOf(task);
       const top = taskIndex * ROW_HEIGHT + 8;
       const height = ROW_HEIGHT - 16;
 
+      if (sameDayDeps.length > 0) {
+        for (const depId of sameDayDeps) {
+          const depIdx = tasks.findIndex(t => t.id === depId);
+          if (depIdx === -1) continue;
+          if (taskIndex > depIdx) {
+            currentLeft = startIdx * dayWidth + 2;
+            currentWidth = (dayWidth - 4) / 2;
+          } else {
+            currentLeft = startIdx * dayWidth + 2 + (dayWidth - 4) / 2;
+            currentWidth = (dayWidth - 4) / 2;
+          }
+        }
+      }
+
       const isInvalid = hasInvalidDependencies({
         ...task,
         start_date: dragging && dragging.taskId === task.id ? currentStartDate : task.start_date,
-      });
+      }) && sameDayDeps.length === 0;
 
-      return { task, left: currentLeft, width: currentWidth, top, height, isInvalid };
+      return { task, left: currentLeft, width: currentWidth, top, height, isInvalid, sameDayDeps };
     });
   };
 
@@ -376,23 +507,44 @@ export default function App() {
         const depRect = rects.find(r => r.task.id === depId);
         if (!depRect) return;
 
-        const fromX = depRect.left + depRect.width;
-        const fromY = depRect.top + depRect.height / 2;
-        const toX = taskRect.left;
-        const toY = taskRect.top + taskRect.height / 2;
+        const isSameDay = task.start_date === (tasks.find(t => t.id === depId)?.end_date || '');
 
-        const midX = fromX + (toX - fromX) / 2;
+        if (isSameDay) {
+          const fromX = depRect.left + depRect.width;
+          const fromY = depRect.top + depRect.height / 2;
+          const toX = taskRect.left;
+          const toY = taskRect.top + taskRect.height / 2;
+          arrows.push(
+            <line
+              key={`${task.id}-${depId}`}
+              x1={fromX}
+              y1={fromY}
+              x2={toX}
+              y2={toY}
+              stroke={darkenColor(task.color || '#4caf50', 0.6)}
+              strokeWidth={2}
+              strokeDasharray="4,2"
+              markerEnd={`url(#arrowhead-${task.id})`}
+            />
+          );
+        } else {
+          const fromX = depRect.left + depRect.width;
+          const fromY = depRect.top + depRect.height / 2;
+          const toX = taskRect.left;
+          const toY = taskRect.top + taskRect.height / 2;
+          const midX = fromX + (toX - fromX) / 2;
 
-        arrows.push(
-          <path
-            key={`${task.id}-${depId}`}
-            d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`}
-            stroke={darkenColor(task.color || '#4caf50', 0.6)}
-            strokeWidth={2}
-            fill="none"
-            markerEnd={`url(#arrowhead-${task.id})`}
-          />
-        );
+          arrows.push(
+            <path
+              key={`${task.id}-${depId}`}
+              d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`}
+              stroke={darkenColor(task.color || '#4caf50', 0.6)}
+              strokeWidth={2}
+              fill="none"
+              markerEnd={`url(#arrowhead-${task.id})`}
+            />
+          );
+        }
       });
     });
 
@@ -430,6 +582,43 @@ export default function App() {
     );
   };
 
+  const handleImagePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>, taskId: number, currentNotes: string) => {
+    const items = e.clipboardData.items;
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image') !== -1) {
+        e.preventDefault();
+        const file = items[i].getAsFile();
+        if (!file) continue;
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const dataUrl = ev.target?.result as string;
+          const imgTag = `<img src="${dataUrl}" style="max-width:100%;border-radius:4px;margin:4px 0;" />`;
+          const newNotes = currentNotes + (currentNotes && !currentNotes.endsWith('\n') ? '\n' : '') + imgTag;
+          updateTask(taskId, { notes: newNotes });
+        };
+        reader.readAsDataURL(file);
+        break;
+      }
+    }
+  };
+
+  const handleImageDrop = (e: React.DragEvent<HTMLTextAreaElement>, taskId: number, currentNotes: string) => {
+    e.preventDefault();
+    const files = e.dataTransfer.files;
+    for (let i = 0; i < files.length; i++) {
+      if (files[i].type.indexOf('image') !== -1) {
+        const reader = new FileReader();
+        reader.onload = (ev) => {
+          const dataUrl = ev.target?.result as string;
+          const imgTag = `<img src="${dataUrl}" style="max-width:100%;border-radius:4px;margin:4px 0;" />`;
+          const newNotes = currentNotes + (currentNotes && !currentNotes.endsWith('\n') ? '\n' : '') + imgTag;
+          updateTask(taskId, { notes: newNotes });
+        };
+        reader.readAsDataURL(files[i]);
+      }
+    }
+  };
+
   return (
     <div className="h-screen flex flex-col bg-[#f5f5f5]">
       <div className="flex items-center justify-between px-4 py-2 border-b border-[#e0e0e0] bg-white">
@@ -446,6 +635,22 @@ export default function App() {
               </button>
             </span>
           )}
+          <button
+            onClick={handleUndo}
+            disabled={historyIdx <= 0}
+            className={`px-2 py-1 text-xs rounded ${historyIdx <= 0 ? 'bg-[#f0f0f0] text-gray-300 cursor-not-allowed' : 'bg-[#e0e0e0] hover:bg-[#d0d0d0] text-gray-700'}`}
+            title="Deshacer"
+          >
+            <TbArrowBackUp size={16} />
+          </button>
+          <button
+            onClick={handleRedo}
+            disabled={historyIdx >= history.length - 1}
+            className={`px-2 py-1 text-xs rounded ${historyIdx >= history.length - 1 ? 'bg-[#f0f0f0] text-gray-300 cursor-not-allowed' : 'bg-[#e0e0e0] hover:bg-[#d0d0d0] text-gray-700'}`}
+            title="Rehacer"
+          >
+            <TbArrowForwardUp size={16} />
+          </button>
           <button
             onClick={() => setDayWidth(Math.max(DAY_WIDTH_MIN, dayWidth - 15))}
             className="px-2 py-1 text-xs bg-[#e0e0e0] hover:bg-[#d0d0d0] rounded"
@@ -567,8 +772,8 @@ export default function App() {
                 const startIdx = getDayIndex(task.start_date, viewStart);
                 const endIdx = getDayIndex(task.end_date, viewStart);
                 const duration = endIdx - startIdx;
-                const left = startIdx * dayWidth;
-                const width = Math.max(duration * dayWidth, dayWidth);
+                let left = startIdx * dayWidth;
+                let width = Math.max(duration * dayWidth, dayWidth);
 
                 let currentLeft = left;
                 let currentWidth = width;
@@ -584,10 +789,22 @@ export default function App() {
                   }
                 }
 
+                const sameDayDeps = getSameDayDeps(task);
+                if (sameDayDeps.length > 0 && !dragging) {
+                  const depIdx = tasks.findIndex(t => t.id === sameDayDeps[0]);
+                  if (taskIdx > depIdx) {
+                    currentLeft = startIdx * dayWidth + 2;
+                    currentWidth = (dayWidth - 4) / 2;
+                  } else {
+                    currentLeft = startIdx * dayWidth + 2 + (dayWidth - 4) / 2;
+                    currentWidth = (dayWidth - 4) / 2;
+                  }
+                }
+
                 const bgColor = task.color || '#4caf50';
                 const borderColor = darkenColor(bgColor, 0.7);
                 const isLinkTarget = linkMode && linkMode.fromTaskId !== task.id;
-                const isInvalid = hasInvalidDependencies(task);
+                const isInvalid = hasInvalidDependencies(task) && sameDayDeps.length === 0;
 
                 return (
                   <div
@@ -862,6 +1079,38 @@ export default function App() {
                   />
                 </div>
 
+                <div>
+                  <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Notas</label>
+                  <textarea
+                    className="w-full mt-1 px-3 py-2 text-xs border border-[#e0e0e0] rounded-lg outline-none focus:border-[#4caf50] min-h-[60px] resize-y"
+                    defaultValue={task.notes || ''}
+                    placeholder="Agregar notas... (pegá imágenes con Ctrl+V)"
+                    onBlur={(e) => {
+                      updateTask(task.id, { notes: e.target.value });
+                    }}
+                    onPaste={(e) => handleImagePaste(e, task.id, task.notes || '')}
+                    onDrop={(e) => handleImageDrop(e, task.id, task.notes || '')}
+                    onDragOver={(e) => e.preventDefault()}
+                  />
+                  {task.notes && task.notes.includes('<img') && (
+                    <div className="mt-2 p-2 bg-[#fafafa] rounded-lg border border-[#e0e0e0]">
+                      <div className="text-[10px] text-gray-400 mb-1">Vista previa:</div>
+                      <div className="flex flex-wrap gap-2">
+                        {task.notes.split(/(<img[^>]*>)/).map((part, i) => {
+                          if (part.startsWith('<img')) {
+                            return <div key={i} dangerouslySetInnerHTML={{ __html: part }} className="max-w-[120px]" />;
+                          }
+                          return null;
+                        })}
+                      </div>
+                    </div>
+                  )}
+                  <div className="flex items-center gap-1 mt-1 text-[10px] text-gray-400">
+                    <TbPhoto size={12} />
+                    <span>Pegá o arrastrá imágenes aquí</span>
+                  </div>
+                </div>
+
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Inicio</label>
@@ -885,21 +1134,6 @@ export default function App() {
                       }}
                     />
                   </div>
-                </div>
-
-                <div>
-                  <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Nota</label>
-                  <input
-                    className="w-full mt-1 px-3 py-2 text-xs border border-[#e0e0e0] rounded-lg outline-none focus:border-[#4caf50]"
-                    defaultValue={task.estimate || ''}
-                    placeholder="Agregar nota..."
-                    onBlur={(e) => {
-                      updateTask(task.id, { estimate: e.target.value });
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                    }}
-                  />
                 </div>
 
                 <div>
@@ -953,6 +1187,9 @@ export default function App() {
                                 style={{ backgroundColor: depTask.color || '#4caf50' }}
                               />
                               {depTask.name}
+                              {task.start_date === depTask.end_date && (
+                                <span className="text-[10px] text-orange-500">(mismo día)</span>
+                              )}
                             </span>
                             <button
                               className="text-red-400 hover:text-red-600 text-xs font-bold"

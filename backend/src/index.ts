@@ -53,6 +53,9 @@ const migrateTasks = () => {
   if (!colNames.includes('status')) {
     db.exec("ALTER TABLE tasks ADD COLUMN status TEXT DEFAULT 'pendiente'");
   }
+  if (!colNames.includes('notes')) {
+    db.exec("ALTER TABLE tasks ADD COLUMN notes TEXT DEFAULT ''");
+  }
 };
 migrateTasks();
 
@@ -72,16 +75,18 @@ app.get('/api/tasks', (_req, res) => {
 
 app.post('/api/tasks', (req, res) => {
   try {
-    const { name, start_date, end_date, estimate, color, status } = req.body;
+    const { name, start_date, end_date, estimate, color, status, notes } = req.body;
     const stmt = db.prepare(
-      'INSERT INTO tasks (name, start_date, end_date, estimate, color, status) VALUES (?, ?, ?, ?, ?, ?)'
+      'INSERT INTO tasks (name, start_date, end_date, estimate, color, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?)'
     );
-    const result = stmt.run(name, start_date, end_date, estimate || null, color || '#4caf50', status || 'pendiente');
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(result.lastInsertRowid);
+    const result = stmt.run(name, start_date, end_date, estimate || null, color || '#4caf50', status || 'pendiente', notes || '');
+    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(result.lastInsertRowid) as any;
+    const deps = db.prepare('SELECT depends_on_id FROM task_dependencies WHERE task_id = ?').all(result.lastInsertRowid) as { depends_on_id: number }[];
+    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id) };
 
-    io.emit('task-created', task);
+    io.emit('task-created', taskWithDeps);
 
-    res.status(201).json(task);
+    res.status(201).json(taskWithDeps);
   } catch (error) {
     res.status(500).json({ error: 'Error creating task' });
   }
@@ -90,16 +95,18 @@ app.post('/api/tasks', (req, res) => {
 app.put('/api/tasks/:id', (req, res) => {
   try {
     const { id } = req.params;
-    const { name, start_date, end_date, estimate, color, status } = req.body;
+    const { name, start_date, end_date, estimate, color, status, notes } = req.body;
     const stmt = db.prepare(
-      'UPDATE tasks SET name = ?, start_date = ?, end_date = ?, estimate = ?, color = ?, status = ? WHERE id = ?'
+      'UPDATE tasks SET name = ?, start_date = ?, end_date = ?, estimate = ?, color = ?, status = ?, notes = ? WHERE id = ?'
     );
-    stmt.run(name, start_date, end_date, estimate || null, color || '#4caf50', status || 'pendiente', id);
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id);
+    stmt.run(name, start_date, end_date, estimate || null, color || '#4caf50', status || 'pendiente', notes || '', id);
+    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as any;
+    const deps = db.prepare('SELECT depends_on_id FROM task_dependencies WHERE task_id = ?').all(id) as { depends_on_id: number }[];
+    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id) };
 
-    io.emit('task-updated', task);
+    io.emit('task-updated', taskWithDeps);
 
-    res.json(task);
+    res.json(taskWithDeps);
   } catch (error) {
     res.status(500).json({ error: 'Error updating task' });
   }

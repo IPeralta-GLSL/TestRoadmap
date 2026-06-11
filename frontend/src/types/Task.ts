@@ -7,4 +7,5 @@ export interface Task {
   color: string;
   status: string;
   dependencies: number[];
+  notes: string | null;
 }
