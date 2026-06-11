@@ -317,7 +317,7 @@ export default function App() {
     return task.dependencies.some(depId => {
       const depTask = tasks.find(t => t.id === depId);
       if (!depTask) return false;
-      return parseISO(task.start_date) < parseISO(depTask.start_date);
+      return parseISO(task.start_date) < parseISO(depTask.end_date);
     });
   };
 
