@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
+import { TbX, TbFileText, TbPalette, TbLink, TbTrash } from 'react-icons/tb';
 import { Task } from './types/Task';
 import { addDays, format, parseISO, differenceInDays, startOfWeek, isSameDay } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -685,7 +686,7 @@ export default function App() {
               setContextMenu(null);
             }}
           >
-            <span>📋</span> Detalles
+            <TbFileText size={14} /> Detalles
           </button>
 
           <div className="border-t border-[#e0e0e0] my-1" />
@@ -721,7 +722,7 @@ export default function App() {
                 setColorPickerFor(contextMenu.taskId);
               }}
             >
-              <span>🎨</span> Cambiar color
+              <TbPalette size={14} /> Cambiar color
             </button>
           )}
 
@@ -734,7 +735,7 @@ export default function App() {
               setContextMenu(null);
             }}
           >
-            <span>🔗</span> Agregar dependencia
+            <TbLink size={14} /> Agregar dependencia
           </button>
 
           {tasks.find(t => t.id === contextMenu.taskId)?.dependencies &&
@@ -753,21 +754,21 @@ export default function App() {
                       />
                       {depTask.name}
                     </span>
-                    <button
-                      className="text-red-400 hover:text-red-600 text-[10px] font-bold"
-                      onClick={async () => {
-                        try {
-                          await fetch(`${API_URL}/tasks/${contextMenu.taskId}/dependencies/${depId}`, {
-                            method: 'DELETE',
-                          });
-                          await fetchTasks();
-                        } catch (err) {
-                          console.error('Error removing dependency:', err);
-                        }
-                      }}
-                    >
-                      ✕
-                    </button>
+                     <button
+                       className="text-red-400 hover:text-red-600 text-[10px] font-bold"
+                       onClick={async () => {
+                         try {
+                           await fetch(`${API_URL}/tasks/${contextMenu.taskId}/dependencies/${depId}`, {
+                             method: 'DELETE',
+                           });
+                           await fetchTasks();
+                         } catch (err) {
+                           console.error('Error removing dependency:', err);
+                         }
+                       }}
+                     >
+                       <TbX size={12} />
+                     </button>
                   </div>
                 );
               })}
@@ -783,7 +784,7 @@ export default function App() {
               setContextMenu(null);
             }}
           >
-            <span>🗑</span> Eliminar tarea
+            <TbTrash size={14} /> Eliminar tarea
           </button>
         </div>
       )}
@@ -811,7 +812,7 @@ export default function App() {
                   className="text-gray-400 hover:text-gray-600 text-lg font-bold"
                   onClick={() => setDetailModal(null)}
                 >
-                  ✕
+                  <TbX size={18} />
                 </button>
               </div>
 
