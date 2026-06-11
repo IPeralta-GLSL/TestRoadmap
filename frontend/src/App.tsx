@@ -74,7 +74,7 @@ export default function App() {
   const [linkMode, setLinkMode] = useState<{ fromTaskId: number } | null>(null);
   const [colorPickerFor, setColorPickerFor] = useState<number | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
-  const dragStartRef = useRef<{ x: number; y: number; time: number } | null>(null);
+  const dragStartRef = useRef<{ x: number; y: number; time: number; button: number } | null>(null);
 
   const numDays = 60;
 
@@ -217,7 +217,7 @@ export default function App() {
   ) => {
     e.stopPropagation();
     e.preventDefault();
-    dragStartRef.current = { x: e.clientX, y: e.clientY, time: Date.now() };
+    dragStartRef.current = { x: e.clientX, y: e.clientY, time: Date.now(), button: e.button };
     setDragging({ taskId, type, startX: e.clientX, origStart, origEnd });
   };
 
@@ -229,22 +229,23 @@ export default function App() {
       setDragDelta(delta);
     };
 
-    const handleMouseUp = () => {
-      if (dragStartRef.current) {
-        const elapsed = Date.now() - dragStartRef.current.time;
-        dragStartRef.current = null;
+      const handleMouseUp = () => {
+        if (dragStartRef.current) {
+          const elapsed = Date.now() - dragStartRef.current.time;
+          const button = dragStartRef.current.button;
+          dragStartRef.current = null;
 
-        if (elapsed < 200 && Math.abs(dragDelta) < 3) {
-          if (linkMode) {
-            if (linkMode.fromTaskId !== dragging.taskId) {
-              addDependency(dragging.taskId, linkMode.fromTaskId);
+          if (elapsed < 200 && Math.abs(dragDelta) < 3 && button === 0) {
+            if (linkMode) {
+              if (linkMode.fromTaskId !== dragging.taskId) {
+                addDependency(dragging.taskId, linkMode.fromTaskId);
+              }
+              setLinkMode(null);
+            } else {
+              setDetailModal({ taskId: dragging.taskId });
             }
-            setLinkMode(null);
-          } else {
-            setDetailModal({ taskId: dragging.taskId });
           }
         }
-      }
 
       const daysDelta = Math.round(dragDelta / dayWidth);
       if (daysDelta !== 0 && dragging) {
@@ -611,7 +612,6 @@ export default function App() {
                         }
                         handleMouseDown(e, task.id, 'move', task.start_date, task.end_date);
                       }}
-                      onContextMenu={(e) => handleContextMenu(e, task.id)}
                     >
                       <div
                         className="absolute left-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-l-[3px]"
@@ -635,7 +635,7 @@ export default function App() {
                           className="text-[11px] font-semibold text-white whitespace-nowrap overflow-hidden text-ellipsis"
                           style={{ textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}
                         >
-                          {task.name}
+                          {task.name} ({task.status || 'pendiente'})
                         </span>
                       </div>
                     </div>
@@ -644,6 +644,29 @@ export default function App() {
               })}
 
               {renderArrows()}
+
+              {(() => {
+                const todayIndex = differenceInDays(new Date(), viewStart);
+                if (todayIndex < 0 || todayIndex >= numDays) return null;
+                return (
+                  <div
+                    className="absolute top-0 bottom-0 pointer-events-none"
+                    style={{
+                      left: todayIndex * dayWidth + dayWidth / 2,
+                      width: 2,
+                      backgroundColor: '#f44336',
+                      zIndex: 4,
+                    }}
+                  >
+                    <div
+                      className="absolute -top-0 left-1/2 -translate-x-1/2 text-[9px] font-bold text-white px-1 py-0.5 rounded whitespace-nowrap"
+                      style={{ backgroundColor: '#f44336' }}
+                    >
+                      Hoy
+                    </div>
+                  </div>
+                );
+              })()}
             </div>
           </div>
         </div>
@@ -835,11 +858,11 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Estimación</label>
+                  <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Nota</label>
                   <input
                     className="w-full mt-1 px-3 py-2 text-xs border border-[#e0e0e0] rounded-lg outline-none focus:border-[#4caf50]"
                     defaultValue={task.estimate || ''}
-                    placeholder="ej: 5 días"
+                    placeholder="Agregar nota..."
                     onBlur={(e) => {
                       updateTask(task.id, { estimate: e.target.value });
                     }}
