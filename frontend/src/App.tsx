@@ -527,6 +527,7 @@ export default function App() {
             ref={calendarContainerRef}
             style={{ minWidth: numDays * dayWidth }}
           >
+            <div className="h-px bg-[#e0e0e0]" />
             <div className="flex border-b border-[#e0e0e0] bg-[#fafafa] sticky top-0 z-10">
               {weeks.map((week, wi) => (
                 <div key={wi} className="flex" style={{ width: week.days.length * dayWidth }}>
@@ -554,6 +555,7 @@ export default function App() {
                     }}
                   >
                     <div className="text-[10px] text-gray-400">{dayNames[(dayOfWeek + 6) % 7]}</div>
+                    <div className="h-px bg-[#e0e0e0] my-0.5" />
                     <div className="text-[10px] font-medium">{format(day, 'd')}</div>
                   </div>
                 );
@@ -594,6 +596,7 @@ export default function App() {
                     style={{ top: taskIdx * ROW_HEIGHT, height: ROW_HEIGHT }}
                     onContextMenu={(e) => handleContextMenu(e, task.id)}
                   >
+                    <div className="border-t border-[#e0e0e0] mx-2" />
                     {calendarDays.map((day, i) => {
                       const dayOfWeek = day.getDay();
                       const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
@@ -642,6 +645,16 @@ export default function App() {
                       }}
                     >
                       <div
+                        className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none"
+                      >
+                        <span
+                          className="text-[10px] font-bold text-white truncate px-1"
+                          style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}
+                        >
+                          {task.name}
+                        </span>
+                      </div>
+                      <div
                         className="absolute left-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-l-[3px]"
                         onMouseDown={(e) => {
                           if (linkMode) return;
@@ -655,17 +668,6 @@ export default function App() {
                           handleMouseDown(e, task.id, 'resize-right', task.start_date, task.end_date);
                         }}
                       />
-                      <div
-                        className="absolute inset-0 flex items-center justify-center px-3 overflow-hidden"
-                        style={{ pointerEvents: 'none' }}
-                      >
-                        <span
-                          className="text-[11px] font-semibold text-white whitespace-nowrap overflow-hidden text-ellipsis"
-                          style={{ textShadow: '0 1px 2px rgba(0,0,0,0.3)' }}
-                        >
-                          {task.name} ({task.status || 'pendiente'})
-                        </span>
-                      </div>
                     </div>
                   </div>
                 );
