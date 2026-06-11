@@ -312,6 +312,15 @@ export default function App() {
 
   const dayNames = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 
+  const hasInvalidDependencies = (task: Task): boolean => {
+    if (!task.dependencies || task.dependencies.length === 0) return false;
+    return task.dependencies.some(depId => {
+      const depTask = tasks.find(t => t.id === depId);
+      if (!depTask) return false;
+      return parseISO(task.start_date) < parseISO(depTask.start_date);
+    });
+  };
+
   const getTaskRects = () => {
     return tasks.map((task) => {
       const startIdx = getDayIndex(task.start_date, viewStart);
@@ -322,12 +331,15 @@ export default function App() {
 
       let currentLeft = left;
       let currentWidth = width;
+      let currentStartDate = task.start_date;
       if (dragging && dragging.taskId === task.id) {
         const daysDelta = Math.round(dragDelta / dayWidth);
         if (dragging.type === 'move') {
           currentLeft = left + daysDelta * dayWidth;
+          currentStartDate = format(addDays(parseISO(dragging.origStart), daysDelta), 'yyyy-MM-dd');
         } else if (dragging.type === 'resize-left') {
           currentLeft = left + daysDelta * dayWidth;
+          currentStartDate = format(addDays(parseISO(dragging.origStart), daysDelta), 'yyyy-MM-dd');
           currentWidth = width - daysDelta * dayWidth;
         } else if (dragging.type === 'resize-right') {
           currentWidth = width + daysDelta * dayWidth;
@@ -338,7 +350,12 @@ export default function App() {
       const top = taskIndex * ROW_HEIGHT + 8;
       const height = ROW_HEIGHT - 16;
 
-      return { task, left: currentLeft, width: currentWidth, top, height };
+      const isInvalid = hasInvalidDependencies({
+        ...task,
+        start_date: dragging && dragging.taskId === task.id ? currentStartDate : task.start_date,
+      });
+
+      return { task, left: currentLeft, width: currentWidth, top, height, isInvalid };
     });
   };
 
@@ -564,6 +581,7 @@ export default function App() {
                 const bgColor = task.color || '#4caf50';
                 const borderColor = darkenColor(bgColor, 0.7);
                 const isLinkTarget = linkMode && linkMode.fromTaskId !== task.id;
+                const isInvalid = hasInvalidDependencies(task);
 
                 return (
                   <div
@@ -596,10 +614,15 @@ export default function App() {
                         top: 8,
                         height: ROW_HEIGHT - 16,
                         backgroundColor: bgColor,
-                        border: isLinkTarget ? `2px dashed #ff9800` : `1px solid ${borderColor}`,
+                        border: isLinkTarget
+                          ? `2px dashed #ff9800`
+                          : isInvalid
+                          ? `2px solid #f44336`
+                          : `1px solid ${borderColor}`,
                         cursor: dragging && dragging.taskId === task.id ? 'grabbing' : linkMode ? 'pointer' : 'grab',
                         zIndex: dragging && dragging.taskId === task.id ? 10 : 2,
                         opacity: linkMode && !isLinkTarget ? 0.6 : 1,
+                        boxShadow: isInvalid ? `0 0 8px rgba(244, 67, 54, 0.6)` : 'none',
                       }}
                       onMouseDown={(e) => {
                         if (linkMode) {
