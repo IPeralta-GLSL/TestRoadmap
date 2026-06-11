@@ -193,7 +193,11 @@ export default function App() {
   };
 
   const handleWheel = useCallback((e: WheelEvent) => {
-    if (e.ctrlKey || e.metaKey) {
+    const el = calendarContainerRef.current;
+    if (!el) return;
+    const rect = el.getBoundingClientRect();
+    const isInCalendar = e.clientX >= rect.left && e.clientX <= rect.right && e.clientY >= rect.top && e.clientY <= rect.bottom;
+    if (isInCalendar) {
       e.preventDefault();
       setDayWidth(prev => {
         const delta = e.deltaY > 0 ? -3 : 3;
