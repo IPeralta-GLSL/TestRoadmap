@@ -1,7 +1,3 @@
-# Roadmapper - Herramienta Web de Roadmaps
-
-Recreación moderna y multiplataforma de Roadmapper como aplicación web colaborativa.
-
 ## Características
 
 - Vista de calendario horizontal con zoom ajustable
