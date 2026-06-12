@@ -1089,6 +1089,41 @@ export default function App() {
         </div>
       )}
 
+      {(() => {
+        const hasPreview = previewAttachment !== null;
+        if (!hasPreview) return null;
+        const att = previewAttachment!;
+        return (
+          <div
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80"
+            onClick={() => setPreviewAttachment(null)}
+            onKeyDown={(e) => { if (e.key === 'Escape') setPreviewAttachment(null); }}
+            tabIndex={0}
+            ref={(el) => { if (el) el.focus(); }}
+          >
+            <div
+              className="relative max-w-[90vw] max-h-[85vh]"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <img
+                src={att.file_data}
+                alt={att.file_name}
+                className="max-w-full max-h-[85vh] rounded-lg shadow-2xl object-contain"
+              />
+              <div className="absolute bottom-0 inset-x-0 bg-black/60 px-4 py-2 rounded-b-lg">
+                <div className="text-xs text-white text-center truncate">{att.file_name}</div>
+              </div>
+              <button
+                className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 rounded-full p-1.5 text-white transition-colors"
+                onClick={() => setPreviewAttachment(null)}
+              >
+                <TbX size={16} />
+              </button>
+            </div>
+          </div>
+        );
+      })()}
+
       {detailModal && (() => {
         const task = tasks.find(t => t.id === detailModal.taskId);
         if (!task) return null;
