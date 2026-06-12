@@ -666,10 +666,14 @@ export default function App() {
     }
   };
 
-  const getFileCategory = (mimeType: string): 'image' | 'video' | 'audio' | 'other' => {
+  const getFileCategory = (mimeType: string, fileName?: string): 'image' | 'video' | 'audio' | '3d' | 'other' => {
     if (mimeType.startsWith('image/')) return 'image';
     if (mimeType.startsWith('video/')) return 'video';
     if (mimeType.startsWith('audio/')) return 'audio';
+    if (mimeType.includes('model') || mimeType === 'application/octet-stream' || mimeType === 'application/gltf-binary' || mimeType === 'application/json') {
+      if (fileName && (fileName.endsWith('.glb') || fileName.endsWith('.gltf'))) return '3d';
+      if (mimeType.includes('model') || mimeType === 'application/gltf-binary') return '3d';
+    }
     return 'other';
   };
 
@@ -680,7 +684,7 @@ export default function App() {
         ref={fileInputRef}
         className="hidden"
         multiple
-        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar"
+        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar,.glb,.gltf"
         onChange={handleFileChange}
       />
       <div className="flex items-center justify-between px-4 py-2 border-b border-[#e0e0e0] bg-white">
@@ -1189,7 +1193,7 @@ export default function App() {
                     </label>
                     <div className="mt-2 grid grid-cols-3 gap-2">
                       {task.attachments.map((att) => {
-                        const cat = getFileCategory(att.file_type);
+                        const cat = getFileCategory(att.file_type, att.file_name);
                         if (cat === 'image') {
                           return (
                             <div key={att.id} className="relative group cursor-pointer rounded-lg overflow-hidden border border-[#e0e0e0] bg-[#fafafa]">
@@ -1244,6 +1248,28 @@ export default function App() {
                                 onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}
                               >
                                 <TbX size={10} className="text-gray-500" />
+                              </button>
+                            </div>
+                          );
+                        }
+                        if (cat === '3d') {
+                          return (
+                            <div key={att.id} className="relative group rounded-lg overflow-hidden border border-[#e0e0e0] bg-black">
+                              <model-viewer
+                                src={att.file_data}
+                                alt={att.file_name}
+                                camera-controls
+                                auto-rotate
+                                style={{ width: '100%', height: '80px', background: '#1a1a1a' } as any}
+                              />
+                              <div className="absolute bottom-0 inset-x-0 bg-black/50 px-1 py-0.5">
+                                <div className="text-[8px] text-white truncate">{att.file_name}</div>
+                              </div>
+                              <button
+                                className="absolute top-1 right-1 bg-black/50 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                                onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}
+                              >
+                                <TbX size={10} className="text-white" />
                               </button>
                             </div>
                           );
