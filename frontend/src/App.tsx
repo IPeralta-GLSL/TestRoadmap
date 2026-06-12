@@ -593,6 +593,9 @@ export default function App() {
             file_data: data,
           }),
         });
+        if (!res.ok) {
+          throw new Error(`Upload failed: ${res.statusText || res.status}`);
+        }
         const result = await res.json();
         if (result.task) {
           setTasks(prev => prev.map(t => t.id === taskId ? result.task : t));
@@ -607,6 +610,7 @@ export default function App() {
         }, 800);
       } catch (err) {
         console.error('Error uploading attachment:', err);
+        alert(err instanceof Error ? err.message : 'Error uploading attachment');
         setUploadProgress(prev => {
           const next = { ...prev };
           delete next[fileKey];
