@@ -44,6 +44,18 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS task_attachments (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    file_name TEXT NOT NULL,
+    file_type TEXT NOT NULL,
+    file_data TEXT NOT NULL,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+  )
+`);
+
 const migrateTasks = () => {
   const cols = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
   const colNames = cols.map(c => c.name);
@@ -56,6 +68,20 @@ const migrateTasks = () => {
   if (!colNames.includes('notes')) {
     db.exec("ALTER TABLE tasks ADD COLUMN notes TEXT DEFAULT ''");
   }
+  const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='task_attachments'").all();
+  if (tables.length === 0) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS task_attachments (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL,
+        file_name TEXT NOT NULL,
+        file_type TEXT NOT NULL,
+        file_data TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+      )
+    `);
+  }
 };
 migrateTasks();
 
@@ -63,9 +89,11 @@ app.get('/api/tasks', (_req, res) => {
   try {
     const tasks = db.prepare('SELECT * FROM tasks').all() as any[];
     const deps = db.prepare('SELECT * FROM task_dependencies').all() as { task_id: number; depends_on_id: number }[];
+    const attachments = db.prepare('SELECT * FROM task_attachments').all() as any[];
     const tasksWithDeps = tasks.map(t => ({
       ...t,
       dependencies: deps.filter(d => d.task_id === t.id).map(d => d.depends_on_id),
+      attachments: attachments.filter(a => a.task_id === t.id),
     }));
     res.json(tasksWithDeps);
   } catch (error) {
@@ -82,7 +110,7 @@ app.post('/api/tasks', (req, res) => {
     const result = stmt.run(name, start_date, end_date, estimate || null, color || '#4caf50', status || 'pendiente', notes || '');
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(result.lastInsertRowid) as any;
     const deps = db.prepare('SELECT depends_on_id FROM task_dependencies WHERE task_id = ?').all(result.lastInsertRowid) as { depends_on_id: number }[];
-    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id) };
+    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id), attachments: [] };
 
     io.emit('task-created', taskWithDeps);
 
@@ -102,7 +130,8 @@ app.put('/api/tasks/:id', (req, res) => {
     stmt.run(name, start_date, end_date, estimate || null, color || '#4caf50', status || 'pendiente', notes || '', id);
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as any;
     const deps = db.prepare('SELECT depends_on_id FROM task_dependencies WHERE task_id = ?').all(id) as { depends_on_id: number }[];
-    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id) };
+    const attachments = db.prepare('SELECT * FROM task_attachments WHERE task_id = ?').all(id) as any[];
+    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id), attachments };
 
     io.emit('task-updated', taskWithDeps);
 
@@ -126,6 +155,46 @@ app.delete('/api/tasks/:id', (req, res) => {
   }
 });
 
+app.post('/api/tasks/:id/attachments', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { file_name, file_type, file_data } = req.body;
+    const stmt = db.prepare(
+      'INSERT INTO task_attachments (task_id, file_name, file_type, file_data) VALUES (?, ?, ?, ?)'
+    );
+    const result = stmt.run(id, file_name, file_type, file_data);
+    const attachment = db.prepare('SELECT * FROM task_attachments WHERE id = ?').get(result.lastInsertRowid);
+    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as any;
+    const deps = db.prepare('SELECT depends_on_id FROM task_dependencies WHERE task_id = ?').all(id) as { depends_on_id: number }[];
+    const attachments = db.prepare('SELECT * FROM task_attachments WHERE task_id = ?').all(id) as any[];
+    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id), attachments };
+    io.emit('task-updated', taskWithDeps);
+    res.status(201).json({ attachment, task: taskWithDeps });
+  } catch (error) {
+    res.status(500).json({ error: 'Error creating attachment' });
+  }
+});
+
+app.delete('/api/attachments/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const attachment = db.prepare('SELECT * FROM task_attachments WHERE id = ?').get(id) as any;
+    if (!attachment) {
+      res.status(404).json({ error: 'Attachment not found' });
+      return;
+    }
+    db.prepare('DELETE FROM task_attachments WHERE id = ?').run(id);
+    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(attachment.task_id) as any;
+    const deps = db.prepare('SELECT depends_on_id FROM task_dependencies WHERE task_id = ?').all(attachment.task_id) as { depends_on_id: number }[];
+    const attachments = db.prepare('SELECT * FROM task_attachments WHERE task_id = ?').all(attachment.task_id) as any[];
+    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id), attachments };
+    io.emit('task-updated', taskWithDeps);
+    res.json({ message: 'Attachment deleted', task: taskWithDeps });
+  } catch (error) {
+    res.status(500).json({ error: 'Error deleting attachment' });
+  }
+});
+
 app.post('/api/tasks/:id/dependencies', (req, res) => {
   try {
     const { id } = req.params;
@@ -140,7 +209,8 @@ app.post('/api/tasks/:id/dependencies', (req, res) => {
     }
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as any;
     const deps = db.prepare('SELECT depends_on_id FROM task_dependencies WHERE task_id = ?').all(id) as { depends_on_id: number }[];
-    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id) };
+    const attachments = db.prepare('SELECT * FROM task_attachments WHERE task_id = ?').all(id) as any[];
+    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id), attachments };
     io.emit('task-updated', taskWithDeps);
     res.json(taskWithDeps);
   } catch (error) {
@@ -154,7 +224,8 @@ app.delete('/api/tasks/:id/dependencies/:depId', (req, res) => {
     db.prepare('DELETE FROM task_dependencies WHERE task_id = ? AND depends_on_id = ?').run(id, depId);
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as any;
     const deps = db.prepare('SELECT depends_on_id FROM task_dependencies WHERE task_id = ?').all(id) as { depends_on_id: number }[];
-    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id) };
+    const attachments = db.prepare('SELECT * FROM task_attachments WHERE task_id = ?').all(id) as any[];
+    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id), attachments };
     io.emit('task-updated', taskWithDeps);
     res.json(taskWithDeps);
   } catch (error) {

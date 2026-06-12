@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto } from 'react-icons/tb';
-import { Task } from './types/Task';
+import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload } from 'react-icons/tb';
+import { Task, Attachment } from './types/Task';
 import { addDays, format, parseISO, differenceInDays, startOfWeek, isSameDay } from 'date-fns';
 import { es } from 'date-fns/locale';
 
@@ -426,18 +426,10 @@ export default function App() {
     return task.dependencies.some(depId => {
       const depTask = tasks.find(t => t.id === depId);
       if (!depTask) return false;
+      if (task.start_date === depTask.end_date) return false;
       const taskStart = parseISO(task.start_date);
       const depEnd = parseISO(depTask.end_date);
       return taskStart < depEnd;
-    });
-  };
-
-  const getSameDayDeps = (task: Task): number[] => {
-    if (!task.dependencies || task.dependencies.length === 0) return [];
-    return task.dependencies.filter(depId => {
-      const depTask = tasks.find(t => t.id === depId);
-      if (!depTask) return false;
-      return task.start_date === depTask.end_date;
     });
   };
 
@@ -466,31 +458,16 @@ export default function App() {
         }
       }
 
-      const sameDayDeps = getSameDayDeps(task);
       const taskIndex = tasks.indexOf(task);
       const top = taskIndex * ROW_HEIGHT + 8;
       const height = ROW_HEIGHT - 16;
 
-      if (sameDayDeps.length > 0) {
-        for (const depId of sameDayDeps) {
-          const depIdx = tasks.findIndex(t => t.id === depId);
-          if (depIdx === -1) continue;
-          if (taskIndex > depIdx) {
-            currentLeft = startIdx * dayWidth + 2;
-            currentWidth = (dayWidth - 4) / 2;
-          } else {
-            currentLeft = startIdx * dayWidth + 2 + (dayWidth - 4) / 2;
-            currentWidth = (dayWidth - 4) / 2;
-          }
-        }
-      }
-
       const isInvalid = hasInvalidDependencies({
         ...task,
         start_date: dragging && dragging.taskId === task.id ? currentStartDate : task.start_date,
-      }) && sameDayDeps.length === 0;
+      });
 
-      return { task, left: currentLeft, width: currentWidth, top, height, isInvalid, sameDayDeps };
+      return { task, left: currentLeft, width: currentWidth, top, height, isInvalid };
     });
   };
 
@@ -507,7 +484,9 @@ export default function App() {
         const depRect = rects.find(r => r.task.id === depId);
         if (!depRect) return;
 
-        const isSameDay = task.start_date === (tasks.find(t => t.id === depId)?.end_date || '');
+        const depTask = tasks.find(t => t.id === depId);
+        if (!depTask) return;
+        const isSameDay = task.start_date === depTask.end_date;
 
         if (isSameDay) {
           const fromX = depRect.left + depRect.width;
@@ -582,45 +561,128 @@ export default function App() {
     );
   };
 
-  const handleImagePaste = (e: React.ClipboardEvent<HTMLTextAreaElement>, taskId: number, currentNotes: string) => {
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const [mediaTargetTaskId, setMediaTargetTaskId] = useState<number | null>(null);
+  const [previewAttachment, setPreviewAttachment] = useState<Attachment | null>(null);
+  const [dragOverTaskId, setDragOverTaskId] = useState<number | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<{ [key: string]: number }>({});
+  const dropZoneRef = useRef<HTMLDivElement>(null);
+
+  const uploadAttachment = (taskId: number, file: File) => {
+    const fileKey = `${file.name}-${Date.now()}`;
+    setUploadProgress(prev => ({ ...prev, [fileKey]: 0 }));
+
+    const reader = new FileReader();
+    reader.onprogress = (ev) => {
+      if (ev.lengthComputable) {
+        const pct = Math.round((ev.loaded / ev.total) * 100);
+        setUploadProgress(prev => ({ ...prev, [fileKey]: pct }));
+      }
+    };
+    reader.onload = async (ev) => {
+      setUploadProgress(prev => ({ ...prev, [fileKey]: 90 }));
+      const data = ev.target?.result as string;
+      try {
+        const res = await fetch(`${API_URL}/tasks/${taskId}/attachments`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            file_name: file.name,
+            file_type: file.type,
+            file_data: data,
+          }),
+        });
+        const result = await res.json();
+        if (result.task) {
+          setTasks(prev => prev.map(t => t.id === taskId ? result.task : t));
+        }
+        setUploadProgress(prev => ({ ...prev, [fileKey]: 100 }));
+        setTimeout(() => {
+          setUploadProgress(prev => {
+            const next = { ...prev };
+            delete next[fileKey];
+            return next;
+          });
+        }, 800);
+      } catch (err) {
+        console.error('Error uploading attachment:', err);
+        setUploadProgress(prev => {
+          const next = { ...prev };
+          delete next[fileKey];
+          return next;
+        });
+      }
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleAttachFile = (taskId: number) => {
+    setMediaTargetTaskId(taskId);
+    setTimeout(() => fileInputRef.current?.click(), 50);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = e.target.files;
+    const taskId = mediaTargetTaskId;
+    if (!files || !taskId) return;
+    for (let i = 0; i < files.length; i++) {
+      uploadAttachment(taskId, files[i]);
+    }
+    if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  const handleDeleteAttachment = async (attachmentId: number) => {
+    try {
+      const res = await fetch(`${API_URL}/attachments/${attachmentId}`, { method: 'DELETE' });
+      const result = await res.json();
+      if (result.task) {
+        setTasks(prev => prev.map(t => t.id === result.task.id ? result.task : t));
+      }
+      await fetchTasks();
+    } catch (err) {
+      console.error('Error deleting attachment:', err);
+    }
+  };
+
+  const handleDropZone = (e: React.DragEvent<HTMLDivElement>, taskId: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setDragOverTaskId(null);
+    const files = e.dataTransfer.files;
+    for (let i = 0; i < files.length; i++) {
+      uploadAttachment(taskId, files[i]);
+    }
+  };
+
+  const handlePasteToAttachments = (e: React.ClipboardEvent<HTMLTextAreaElement>, taskId: number) => {
     const items = e.clipboardData.items;
     for (let i = 0; i < items.length; i++) {
       if (items[i].type.indexOf('image') !== -1) {
         e.preventDefault();
         const file = items[i].getAsFile();
-        if (!file) continue;
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-          const dataUrl = ev.target?.result as string;
-          const imgTag = `<img src="${dataUrl}" style="max-width:100%;border-radius:4px;margin:4px 0;" />`;
-          const newNotes = currentNotes + (currentNotes && !currentNotes.endsWith('\n') ? '\n' : '') + imgTag;
-          updateTask(taskId, { notes: newNotes });
-        };
-        reader.readAsDataURL(file);
+        if (file) uploadAttachment(taskId, file);
         break;
       }
     }
   };
 
-  const handleImageDrop = (e: React.DragEvent<HTMLTextAreaElement>, taskId: number, currentNotes: string) => {
-    e.preventDefault();
-    const files = e.dataTransfer.files;
-    for (let i = 0; i < files.length; i++) {
-      if (files[i].type.indexOf('image') !== -1) {
-        const reader = new FileReader();
-        reader.onload = (ev) => {
-          const dataUrl = ev.target?.result as string;
-          const imgTag = `<img src="${dataUrl}" style="max-width:100%;border-radius:4px;margin:4px 0;" />`;
-          const newNotes = currentNotes + (currentNotes && !currentNotes.endsWith('\n') ? '\n' : '') + imgTag;
-          updateTask(taskId, { notes: newNotes });
-        };
-        reader.readAsDataURL(files[i]);
-      }
-    }
+  const getFileCategory = (mimeType: string): 'image' | 'video' | 'audio' | 'other' => {
+    if (mimeType.startsWith('image/')) return 'image';
+    if (mimeType.startsWith('video/')) return 'video';
+    if (mimeType.startsWith('audio/')) return 'audio';
+    return 'other';
   };
 
   return (
     <div className="h-screen flex flex-col bg-[#f5f5f5]">
+      <input
+        type="file"
+        ref={fileInputRef}
+        className="hidden"
+        multiple
+        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar"
+        onChange={handleFileChange}
+      />
       <div className="flex items-center justify-between px-4 py-2 border-b border-[#e0e0e0] bg-white">
         <h1 className="text-base font-semibold tracking-tight">Roadmapper</h1>
         <div className="flex items-center gap-2">
@@ -789,22 +851,10 @@ export default function App() {
                   }
                 }
 
-                const sameDayDeps = getSameDayDeps(task);
-                if (sameDayDeps.length > 0 && !dragging) {
-                  const depIdx = tasks.findIndex(t => t.id === sameDayDeps[0]);
-                  if (taskIdx > depIdx) {
-                    currentLeft = startIdx * dayWidth + 2;
-                    currentWidth = (dayWidth - 4) / 2;
-                  } else {
-                    currentLeft = startIdx * dayWidth + 2 + (dayWidth - 4) / 2;
-                    currentWidth = (dayWidth - 4) / 2;
-                  }
-                }
-
                 const bgColor = task.color || '#4caf50';
                 const borderColor = darkenColor(bgColor, 0.7);
                 const isLinkTarget = linkMode && linkMode.fromTaskId !== task.id;
-                const isInvalid = hasInvalidDependencies(task) && sameDayDeps.length === 0;
+                const isInvalid = hasInvalidDependencies(task);
 
                 return (
                   <div
@@ -1079,37 +1129,152 @@ export default function App() {
                   />
                 </div>
 
-                <div>
+                <div
+                  ref={dropZoneRef}
+                  className={`relative rounded-lg transition-colors ${dragOverTaskId === task.id ? 'bg-blue-50 ring-2 ring-blue-300' : ''}`}
+                  onDragEnter={(e) => { e.preventDefault(); setDragOverTaskId(task.id); }}
+                  onDragOver={(e) => { e.preventDefault(); setDragOverTaskId(task.id); }}
+                  onDragLeave={() => setDragOverTaskId(null)}
+                  onDrop={(e) => handleDropZone(e, task.id)}
+                >
                   <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Notas</label>
                   <textarea
                     className="w-full mt-1 px-3 py-2 text-xs border border-[#e0e0e0] rounded-lg outline-none focus:border-[#4caf50] min-h-[60px] resize-y"
                     defaultValue={task.notes || ''}
-                    placeholder="Agregar notas... (pegá imágenes con Ctrl+V)"
+                    placeholder="Agregar notas..."
                     onBlur={(e) => {
                       updateTask(task.id, { notes: e.target.value });
                     }}
-                    onPaste={(e) => handleImagePaste(e, task.id, task.notes || '')}
-                    onDrop={(e) => handleImageDrop(e, task.id, task.notes || '')}
-                    onDragOver={(e) => e.preventDefault()}
+                    onPaste={(e) => handlePasteToAttachments(e, task.id)}
                   />
-                  {task.notes && task.notes.includes('<img') && (
-                    <div className="mt-2 p-2 bg-[#fafafa] rounded-lg border border-[#e0e0e0]">
-                      <div className="text-[10px] text-gray-400 mb-1">Vista previa:</div>
-                      <div className="flex flex-wrap gap-2">
-                        {task.notes.split(/(<img[^>]*>)/).map((part, i) => {
-                          if (part.startsWith('<img')) {
-                            return <div key={i} dangerouslySetInnerHTML={{ __html: part }} className="max-w-[120px]" />;
-                          }
-                          return null;
-                        })}
-                      </div>
+                  <div className="flex items-center gap-2 mt-2">
+                    <button
+                      className="flex items-center gap-1 px-2 py-1 text-[10px] bg-[#f0f0f0] hover:bg-[#e0e0e0] rounded text-gray-600"
+                      onClick={() => handleAttachFile(task.id)}
+                    >
+                      <TbPaperclip size={12} /> Adjuntar archivo
+                    </button>
+                  </div>
+                  {Object.keys(uploadProgress).length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {Object.entries(uploadProgress).map(([key, pct]) => (
+                        <div key={key}>
+                          <div className="flex items-center justify-between text-[10px] text-gray-500 mb-0.5">
+                            <span className="truncate max-w-[280px]">{key.split('-').slice(0, -1).join('-')}</span>
+                            <span>{pct}%</span>
+                          </div>
+                          <div className="w-full h-1.5 bg-[#e0e0e0] rounded-full overflow-hidden">
+                            <div
+                              className="h-full rounded-full transition-all duration-200"
+                              style={{
+                                width: `${pct}%`,
+                                backgroundColor: pct === 100 ? '#4caf50' : '#2196f3',
+                              }}
+                            />
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   )}
                   <div className="flex items-center gap-1 mt-1 text-[10px] text-gray-400">
                     <TbPhoto size={12} />
-                    <span>Pegá o arrastrá imágenes aquí</span>
+                    <span>Arrastrá archivos aquí o pegá imágenes con Ctrl+V</span>
                   </div>
                 </div>
+
+                {task.attachments && task.attachments.length > 0 && (
+                  <div>
+                    <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">
+                      Archivos adjuntos ({task.attachments.length})
+                    </label>
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      {task.attachments.map((att) => {
+                        const cat = getFileCategory(att.file_type);
+                        if (cat === 'image') {
+                          return (
+                            <div key={att.id} className="relative group cursor-pointer rounded-lg overflow-hidden border border-[#e0e0e0] bg-[#fafafa]">
+                              <img
+                                src={att.file_data}
+                                alt={att.file_name}
+                                className="w-full h-20 object-cover"
+                                onClick={() => setPreviewAttachment(att)}
+                              />
+                              <div className="absolute bottom-0 inset-x-0 bg-black/50 px-1 py-0.5">
+                                <div className="text-[8px] text-white truncate">{att.file_name}</div>
+                              </div>
+                              <button
+                                className="absolute top-1 right-1 bg-black/50 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                                onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}
+                              >
+                                <TbX size={10} className="text-white" />
+                              </button>
+                            </div>
+                          );
+                        }
+                        if (cat === 'video') {
+                          return (
+                            <div key={att.id} className="relative group rounded-lg overflow-hidden border border-[#e0e0e0] bg-black">
+                              <video
+                                src={att.file_data}
+                                controls
+                                className="w-full h-20 object-cover"
+                              />
+                              <div className="absolute bottom-0 inset-x-0 bg-black/50 px-1 py-0.5">
+                                <div className="text-[8px] text-white truncate">{att.file_name}</div>
+                              </div>
+                              <button
+                                className="absolute top-1 right-1 bg-black/50 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                                onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}
+                              >
+                                <TbX size={10} className="text-white" />
+                              </button>
+                            </div>
+                          );
+                        }
+                        if (cat === 'audio') {
+                          return (
+                            <div key={att.id} className="relative group rounded-lg overflow-hidden border border-[#e0e0e0] bg-[#fafafa] p-2">
+                              <div className="flex items-center gap-1 mb-1">
+                                <TbPaperclip size={12} className="text-gray-400" />
+                                <span className="text-[9px] text-gray-500 truncate">{att.file_name}</span>
+                              </div>
+                              <audio src={att.file_data} controls className="w-full h-8" />
+                              <button
+                                className="absolute top-1 right-1 bg-white border rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                                onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}
+                              >
+                                <TbX size={10} className="text-gray-500" />
+                              </button>
+                            </div>
+                          );
+                        }
+                        return (
+                          <div key={att.id} className="relative group rounded-lg overflow-hidden border border-[#e0e0e0] bg-[#fafafa] p-2">
+                            <div className="flex items-center gap-1">
+                              <TbPaperclip size={12} className="text-gray-400" />
+                              <span className="text-[9px] text-gray-600 truncate">{att.file_name}</span>
+                            </div>
+                            <div className="flex gap-1 mt-1">
+                              <a
+                                href={att.file_data}
+                                download={att.file_name}
+                                className="text-[9px] text-blue-500 hover:underline flex items-center gap-0.5"
+                              >
+                                <TbDownload size={10} /> Descargar
+                              </a>
+                            </div>
+                            <button
+                              className="absolute top-1 right-1 bg-white border rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
+                              onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}
+                            >
+                              <TbX size={10} className="text-gray-500" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>

@@ -1,3 +1,12 @@
+export interface Attachment {
+  id: number;
+  task_id: number;
+  file_name: string;
+  file_type: string;
+  file_data: string;
+  created_at: string;
+}
+
 export interface Task {
   id: number;
   name: string;
@@ -8,4 +17,5 @@ export interface Task {
   status: string;
   dependencies: number[];
   notes: string | null;
+  attachments: Attachment[];
 }
