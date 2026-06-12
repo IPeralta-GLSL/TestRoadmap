@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
 import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload } from 'react-icons/tb';
 import { Task, Attachment } from './types/Task';
+import Viewer3D from './components/Viewer3D';
 import { addDays, format, parseISO, differenceInDays, startOfWeek, isSameDay } from 'date-fns';
 import { es } from 'date-fns/locale';
 
@@ -674,6 +675,10 @@ export default function App() {
       if (fileName && (fileName.endsWith('.glb') || fileName.endsWith('.gltf'))) return '3d';
       if (mimeType.includes('model') || mimeType === 'application/gltf-binary') return '3d';
     }
+    if (fileName) {
+      const ext = fileName.split('.').pop()?.toLowerCase();
+      if (ext && ['fbx', 'obj', 'stl', '3ds', 'dae', 'off', 'ply', 'wrl', '3mf'].includes(ext)) return '3d';
+    }
     return 'other';
   };
 
@@ -684,7 +689,7 @@ export default function App() {
         ref={fileInputRef}
         className="hidden"
         multiple
-        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar,.glb,.gltf"
+        accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar,.glb,.gltf,.fbx,.obj,.stl,.3ds,.dae,.off,.ply,.wrl,.3mf"
         onChange={handleFileChange}
       />
       <div className="flex items-center justify-between px-4 py-2 border-b border-[#e0e0e0] bg-white">
@@ -1289,14 +1294,10 @@ export default function App() {
                         }
                         if (cat === '3d') {
                           return (
-                            <div key={att.id} className="relative group rounded-lg overflow-hidden border border-[#e0e0e0] bg-black">
-                              <model-viewer
-                                src={att.file_data}
-                                alt={att.file_name}
-                                camera-controls
-                                auto-rotate
-                                style={{ width: '100%', height: '80px', background: '#1a1a1a' } as any}
-                              />
+                            <div key={att.id} className="relative group rounded-lg overflow-hidden border border-[#e0e0e0] bg-[#1a1a1a]">
+                              <div style={{ width: '100%', height: '80px' }}>
+                                <Viewer3D src={att.file_data} fileName={att.file_name} />
+                              </div>
                               <div className="absolute bottom-0 inset-x-0 bg-black/50 px-1 py-0.5">
                                 <div className="text-[8px] text-white truncate">{att.file_name}</div>
                               </div>
