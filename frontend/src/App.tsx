@@ -1110,11 +1110,17 @@ export default function App() {
               className="relative max-w-[90vw] max-h-[85vh] anim-lightbox"
               onClick={(e) => e.stopPropagation()}
             >
-              <img
-                src={att.file_data}
-                alt={att.file_name}
-                className="max-w-full max-h-[85vh] rounded-lg shadow-2xl object-contain"
-              />
+              {getFileCategory(att.file_type, att.file_name) === '3d' ? (
+                <div className="w-[80vw] h-[70vh] rounded-lg overflow-hidden shadow-2xl bg-[#1a1a1a]">
+                  <Viewer3D src={att.file_data} fileName={att.file_name} />
+                </div>
+              ) : (
+                <img
+                  src={att.file_data}
+                  alt={att.file_name}
+                  className="max-w-full max-h-[85vh] rounded-lg shadow-2xl object-contain"
+                />
+              )}
               <div className="absolute bottom-0 inset-x-0 bg-black/60 px-4 py-2 rounded-b-lg">
                 <div className="text-xs text-white text-center truncate">{att.file_name}</div>
               </div>
@@ -1294,7 +1300,7 @@ export default function App() {
                         }
                         if (cat === '3d') {
                           return (
-                            <div key={att.id} className="relative group rounded-lg overflow-hidden border border-[#e0e0e0] bg-[#1a1a1a]">
+                            <div key={att.id} className="relative group rounded-lg overflow-hidden border border-[#e0e0e0] bg-[#1a1a1a] cursor-pointer" onClick={() => setPreviewAttachment(att)}>
                               <div style={{ width: '100%', height: '80px' }}>
                                 <Viewer3D src={att.file_data} fileName={att.file_name} />
                               </div>
