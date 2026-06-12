@@ -976,7 +976,7 @@ export default function App() {
       {contextMenu && (
         <div
           ref={contextMenuRef}
-          className="fixed z-50 bg-white border border-[#e0e0e0] rounded-lg shadow-xl py-1 min-w-[200px]"
+          className="fixed z-50 bg-white border border-[#e0e0e0] rounded-lg shadow-xl py-1 min-w-[200px] anim-context-menu"
           style={{ left: contextMenu.x, top: contextMenu.y }}
         >
           <button
@@ -1095,14 +1095,14 @@ export default function App() {
         const att = previewAttachment!;
         return (
           <div
-            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80"
+            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 anim-overlay"
             onClick={() => setPreviewAttachment(null)}
             onKeyDown={(e) => { if (e.key === 'Escape') setPreviewAttachment(null); }}
             tabIndex={0}
             ref={(el) => { if (el) el.focus(); }}
           >
             <div
-              className="relative max-w-[90vw] max-h-[85vh]"
+              className="relative max-w-[90vw] max-h-[85vh] anim-lightbox"
               onClick={(e) => e.stopPropagation()}
             >
               <img
@@ -1129,11 +1129,11 @@ export default function App() {
         if (!task) return null;
         return (
           <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 anim-overlay"
             onClick={() => setDetailModal(null)}
           >
             <div
-              className="bg-white rounded-xl shadow-2xl w-[420px] max-h-[80vh] overflow-y-auto"
+              className="bg-white rounded-xl shadow-2xl w-[420px] max-h-[80vh] overflow-y-auto anim-modal"
               onClick={(e) => e.stopPropagation()}
             >
               <div

@@ -14,3 +14,28 @@ body {
   background-color: #f5f5f5;
   color: #1e1e1e;
 }
+
+@keyframes contextMenuIn {
+  from { opacity: 0; transform: scale(0.95) translateY(-4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes modalIn {
+  from { opacity: 0; transform: scale(0.92) translateY(12px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+@keyframes lightboxIn {
+  from { opacity: 0; transform: scale(0.9); }
+  to { opacity: 1; transform: scale(1); }
+}
+
+@keyframes overlayFadeIn {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.anim-context-menu { animation: contextMenuIn 0.15s ease-out both; }
+.anim-modal { animation: modalIn 0.2s ease-out both; }
+.anim-overlay { animation: overlayFadeIn 0.15s ease-out both; }
+.anim-lightbox { animation: lightboxIn 0.25s ease-out both; }
