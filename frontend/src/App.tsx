@@ -620,18 +620,56 @@ export default function App() {
     });
   };
 
+  const getTaskGroupTopPx = (task: Task): { top: number; left: number; width: number } | null => {
+    for (const group of groups) {
+      if (group.collapsed && task.group_id === group.id) {
+        const groupRowIdx = sidebarRows.findIndex(r => r.type === 'group-header' && r.groupId === group.id);
+        if (groupRowIdx === -1) continue;
+        const topPx = sidebarRows.slice(0, groupRowIdx).reduce((t, r) => t + (r.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT), 0);
+        const sIdx = getDayIndex(task.start_date, viewStart);
+        const eIdx = getDayIndex(task.end_date, viewStart);
+        const dur = eIdx - sIdx;
+        const tLeft = sIdx * dayWidth;
+        const tWidth = Math.max(dur * dayWidth, dayWidth);
+        const midLeft = tLeft + tWidth / 2;
+        return { top: topPx, left: midLeft - 4, width: 8 };
+      }
+    }
+    return null;
+  };
+
   const renderArrows = () => {
     const rects = getTaskRects();
     const arrows: React.ReactNode[] = [];
 
     tasks.forEach((task) => {
       if (!task.dependencies) return;
-      const taskRect = rects.find(r => r.task.id === task.id);
+      let taskRect = rects.find(r => r.task.id === task.id);
+      let taskCollapsed = false;
+      if (!taskRect) {
+        const collapsedRect = getTaskGroupTopPx(task);
+        if (collapsedRect) {
+          taskRect = { task, left: collapsedRect.left, width: collapsedRect.width, top: collapsedRect.top + 8, height: ROW_HEIGHT - 16, isInvalid: false };
+          taskCollapsed = true;
+        }
+      }
       if (!taskRect) return;
 
       task.dependencies.forEach(depId => {
-        const depRect = rects.find(r => r.task.id === depId);
+        let depRect = rects.find(r => r.task.id === depId);
+        let depCollapsed = false;
+        if (!depRect) {
+          const depTask = tasks.find(t => t.id === depId);
+          if (!depTask) return;
+          const collapsedRect = getTaskGroupTopPx(depTask);
+          if (collapsedRect) {
+            depRect = { task: depTask, left: collapsedRect.left, width: collapsedRect.width, top: collapsedRect.top + 8, height: ROW_HEIGHT - 16, isInvalid: false };
+            depCollapsed = true;
+          }
+        }
         if (!depRect) return;
+
+        if (taskCollapsed && depCollapsed) return;
 
         const depTask = tasks.find(t => t.id === depId);
         if (!depTask) return;
@@ -944,7 +982,6 @@ export default function App() {
 
       <div className="flex flex-1 overflow-hidden">
         <div className="w-48 border-r flex-shrink-0 overflow-y-auto" style={{ borderColor, backgroundColor: cardBg }}>
-          <div className="border-b" style={{ borderColor, backgroundColor: subtleBg }} />
 
           <div className="relative" ref={addDropdownRef}>
             <button
@@ -1014,6 +1051,11 @@ export default function App() {
                         <span className="flex-1 text-[9px] font-semibold truncate" style={{ color: textPrimary }}>
                           {group.name}
                         </span>
+                        {group.collapsed ? (
+                          <span className="text-[8px] px-1" style={{ color: textMuted }}>
+                            {groupTasks.length}
+                          </span>
+                        ) : null}
                         <button
                           onClick={() => deleteGroup(group.id)}
                           className="text-gray-300 hover:text-red-500 text-[9px] font-bold"
@@ -1021,7 +1063,7 @@ export default function App() {
                           ×
                         </button>
                       </div>
-                      {!group.collapsed && groupTasks.map(task => (
+                      {!group.collapsed && groupTasks.map((task: Task) => (
                         <div
                           key={task.id}
                           className="flex items-center border-b"
@@ -1164,6 +1206,7 @@ export default function App() {
                   const group = groups.find(g => g.id === row.groupId);
                   if (!group) return null;
                   const topPx = sidebarRows.slice(0, rowIdx).reduce((t, r) => t + (r.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT), 0);
+                  const collapsedGroupTasks = group.collapsed ? tasks.filter(t => t.group_id === group.id) : [];
                   return (
                     <div
                       key={`cal-group-row-${group.id}`}
@@ -1178,13 +1221,32 @@ export default function App() {
                       }}
                     >
                       <span
-                        className="text-[8px] font-bold px-1 rounded"
-                        style={{
-                          color: group.color,
-                        }}
+                        className="text-[8px] font-bold px-1 rounded absolute z-10"
+                        style={{ color: group.color, top: 2, left: 6 }}
                       >
                         {group.name}
                       </span>
+                      {group.collapsed && collapsedGroupTasks.map(ct => {
+                        const sIdx = getDayIndex(ct.start_date, viewStart);
+                        const eIdx = getDayIndex(ct.end_date, viewStart);
+                        const dur = eIdx - sIdx;
+                        const ctLeft = sIdx * dayWidth;
+                        const ctWidth = Math.max(dur * dayWidth, dayWidth);
+                        return (
+                          <div
+                            key={`collapsed-bar-${ct.id}`}
+                            className="absolute rounded-[2px]"
+                            style={{
+                              left: ctLeft + 2,
+                              width: ctWidth - 4,
+                              top: GROUP_HEADER_HEIGHT - 12,
+                              height: 8,
+                              backgroundColor: ct.color || '#4caf50',
+                              opacity: 0.7,
+                            }}
+                          />
+                        );
+                      })}
                     </div>
                   );
                 }
