@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload } from 'react-icons/tb';
-import { Task, Attachment } from './types/Task';
+import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload, TbChevronDown, TbChevronRight, TbFolder, TbSun, TbMoon, TbAlertTriangle } from 'react-icons/tb';
+import { Task, Attachment, TaskGroup } from './types/Task';
 import Viewer3D from './components/Viewer3D';
 import { addDays, format, parseISO, differenceInDays, startOfWeek, isSameDay } from 'date-fns';
 import { es } from 'date-fns/locale';
@@ -41,6 +41,20 @@ function hexToRgba(hex: string, alpha: number): string {
   return `rgba(${r},${g},${b},${alpha})`;
 }
 
+function getDependencyErrorMessage(task: Task, allTasks: Task[]): string | null {
+  if (!task.dependencies || task.dependencies.length === 0) return null;
+  for (const depId of task.dependencies) {
+    const depTask = allTasks.find(t => t.id === depId);
+    if (!depTask) continue;
+    const taskStart = parseISO(task.start_date);
+    const depEnd = parseISO(depTask.end_date);
+    if (taskStart < depEnd) {
+      return `Inicia antes de finalizar "${depTask.name}"`;
+    }
+  }
+  return null;
+}
+
 interface DragState {
   taskId: number;
   type: 'move' | 'resize-left' | 'resize-right';
@@ -63,6 +77,7 @@ const MAX_HISTORY = 50;
 
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
+  const [groups, setGroups] = useState<TaskGroup[]>([]);
   const [viewStart] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() - 7);
@@ -79,12 +94,28 @@ export default function App() {
   const [colorPickerFor, setColorPickerFor] = useState<number | null>(null);
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const dragStartRef = useRef<{ x: number; y: number; time: number; button: number } | null>(null);
+  const [showAddDropdown, setShowAddDropdown] = useState(false);
+  const addDropdownRef = useRef<HTMLDivElement>(null);
+  const [theme, setTheme] = useState<'light' | 'dark'>(() => {
+    return (localStorage.getItem('roadmapper-theme') as 'light' | 'dark') || 'light';
+  });
+  const [hoveredTask, setHoveredTask] = useState<number | null>(null);
+  const [sidebarDragTaskId, setSidebarDragTaskId] = useState<number | null>(null);
+  const [sidebarDragOverGroupId, setSidebarDragOverGroupId] = useState<number | null | 'ungrouped'>('ungrouped');
 
   const [history, setHistory] = useState<Task[][]>([[]]);
   const [historyIdx, setHistoryIdx] = useState(0);
   const isUndoRedoRef = useRef(false);
 
   const numDays = 60;
+
+  const isDark = theme === 'dark';
+
+  const toggleTheme = () => {
+    const next = theme === 'light' ? 'dark' : 'light';
+    setTheme(next);
+    localStorage.setItem('roadmapper-theme', next);
+  };
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -105,8 +136,60 @@ export default function App() {
     }
   }, [historyIdx]);
 
+  const fetchGroups = useCallback(async () => {
+    try {
+      const res = await fetch(`${API_URL}/groups`);
+      const data: TaskGroup[] = await res.json();
+      setGroups(data);
+    } catch (err) {
+      console.error('Error fetching groups:', err);
+    }
+  }, []);
+
+  const moveTask = async (taskId: number, newGroupId: number | null, position: number) => {
+    try {
+      await fetch(`${API_URL}/tasks/move`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ task_id: taskId, group_id: newGroupId, position }),
+      });
+      await fetchTasks();
+    } catch (err) {
+      console.error('Error moving task:', err);
+    }
+  };
+
+  const handleSidebarDragStart = (e: React.DragEvent, taskId: number) => {
+    e.dataTransfer.setData('text/plain', String(taskId));
+    e.dataTransfer.effectAllowed = 'move';
+    setSidebarDragTaskId(taskId);
+  };
+
+  const handleSidebarDragEnd = () => {
+    setSidebarDragTaskId(null);
+    setSidebarDragOverGroupId('ungrouped');
+  };
+
+  const handleGroupDrop = (e: React.DragEvent, groupId: number | null) => {
+    e.preventDefault();
+    const taskId = parseInt(e.dataTransfer.getData('text/plain'));
+    if (!taskId) return;
+    const existingInTarget = tasks.filter(t => t.group_id === groupId && t.id !== taskId);
+    const maxPos = existingInTarget.reduce((max, t) => Math.max(max, t.position ?? 0), -1);
+    moveTask(taskId, groupId, maxPos + 1);
+    setSidebarDragTaskId(null);
+    setSidebarDragOverGroupId('ungrouped');
+  };
+
+  const handleGroupDragOver = (e: React.DragEvent, groupId: number | null | 'ungrouped') => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setSidebarDragOverGroupId(groupId);
+  };
+
   useEffect(() => {
     fetchTasks();
+    fetchGroups();
   }, []);
 
   useEffect(() => {
@@ -131,6 +214,21 @@ export default function App() {
       setTasks((prev) => prev.filter((t) => t.id !== taskId));
     });
 
+    socket.on('group-created', (group: TaskGroup) => {
+      setGroups((prev) => {
+        if (prev.find(g => g.id === group.id)) return prev;
+        return [...prev, group];
+      });
+    });
+
+    socket.on('group-updated', (group: TaskGroup) => {
+      setGroups((prev) => prev.map((g) => (g.id === group.id ? group : g)));
+    });
+
+    socket.on('group-deleted', (groupId: number) => {
+      setGroups((prev) => prev.filter((g) => g.id !== groupId));
+    });
+
     return () => {
       socket.disconnect();
     };
@@ -142,14 +240,15 @@ export default function App() {
         setContextMenu(null);
         setColorPickerFor(null);
       }
+      if (showAddDropdown && addDropdownRef.current && !addDropdownRef.current.contains(e.target as Node)) {
+        setShowAddDropdown(false);
+      }
     };
-    if (contextMenu) {
-      document.addEventListener('mousedown', handleClick);
-    }
+    document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
-  }, [contextMenu]);
+  }, [contextMenu, showAddDropdown]);
 
-  const addTask = async () => {
+  const addTask = async (groupId?: number | null) => {
     const today = new Date();
     const end = addDays(today, 7);
     try {
@@ -164,12 +263,57 @@ export default function App() {
           color: '#4caf50',
           status: 'pendiente',
           notes: '',
+          group_id: groupId || null,
         }),
       });
       await fetchTasks();
     } catch (err) {
       console.error('Error creating task:', err);
     }
+  };
+
+  const addGroup = async () => {
+    try {
+      await fetch(`${API_URL}/groups`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: 'Nuevo grupo', color: '#607d8b' }),
+      });
+      await fetchGroups();
+    } catch (err) {
+      console.error('Error creating group:', err);
+    }
+  };
+
+  const deleteGroup = async (id: number) => {
+    try {
+      await fetch(`${API_URL}/groups/${id}`, { method: 'DELETE' });
+      await fetchGroups();
+      await fetchTasks();
+    } catch (err) {
+      console.error('Error deleting group:', err);
+    }
+  };
+
+  const updateGroup = async (id: number, updates: Partial<TaskGroup>) => {
+    try {
+      const group = groups.find(g => g.id === id);
+      if (!group) return;
+      await fetch(`${API_URL}/groups/${id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...group, ...updates }),
+      });
+      await fetchGroups();
+    } catch (err) {
+      console.error('Error updating group:', err);
+    }
+  };
+
+  const toggleGroupCollapse = async (id: number) => {
+    const group = groups.find(g => g.id === id);
+    if (!group) return;
+    await updateGroup(id, { collapsed: group.collapsed ? 0 : 1 });
   };
 
   const deleteTask = async (id: number) => {
@@ -422,16 +566,21 @@ export default function App() {
 
   const dayNames = ['L', 'M', 'X', 'J', 'V', 'S', 'D'];
 
+  const getDependencyErrorMessageForTask = (task: Task): string | null => {
+    return getDependencyErrorMessage(task, tasks);
+  };
+
   const hasInvalidDependencies = (task: Task): boolean => {
-    if (!task.dependencies || task.dependencies.length === 0) return false;
-    return task.dependencies.some(depId => {
-      const depTask = tasks.find(t => t.id === depId);
-      if (!depTask) return false;
-      if (task.start_date === depTask.end_date) return false;
-      const taskStart = parseISO(task.start_date);
-      const depEnd = parseISO(depTask.end_date);
-      return taskStart < depEnd;
-    });
+    return getDependencyErrorMessageForTask(task) !== null;
+  };
+
+  const getTaskTopPx = (taskId: number): number => {
+    let topPx = 0;
+    for (const row of sidebarRows) {
+      if (row.type === 'task' && row.task?.id === taskId) return topPx;
+      topPx += row.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT;
+    }
+    return 0;
   };
 
   const getTaskRects = () => {
@@ -459,8 +608,7 @@ export default function App() {
         }
       }
 
-      const taskIndex = tasks.indexOf(task);
-      const top = taskIndex * ROW_HEIGHT + 8;
+      const top = getTaskTopPx(task.id) + 8;
       const height = ROW_HEIGHT - 16;
 
       const isInvalid = hasInvalidDependencies({
@@ -686,8 +834,44 @@ export default function App() {
     return 'other';
   };
 
+  const GROUP_HEADER_HEIGHT = ROW_HEIGHT;
+
+  interface SidebarRow {
+    type: 'group-header' | 'ungrouped-header' | 'task';
+    groupId?: number | null;
+    groupColor?: string;
+    task?: Task;
+  }
+
+  const sidebarRows: SidebarRow[] = [];
+  for (const group of groups) {
+    const groupTasks = tasks.filter(t => t.group_id === group.id);
+    sidebarRows.push({ type: 'group-header', groupId: group.id, groupColor: group.color });
+    if (!group.collapsed) {
+      groupTasks.forEach(task => sidebarRows.push({ type: 'task', task, groupId: group.id, groupColor: group.color }));
+    }
+  }
+  sidebarRows.push({ type: 'ungrouped-header', groupId: null });
+  const ungroupedTasks = tasks.filter(t => !t.group_id);
+  ungroupedTasks.forEach(task => sidebarRows.push({ type: 'task', task }));
+
+  const visibleTasks: Task[] = [];
+  for (const row of sidebarRows) {
+    if (row.type === 'task' && row.task) {
+      visibleTasks.push(row.task);
+    }
+  }
+
+  const tBg = isDark ? '#1a1a1a' : '#f5f5f5';
+  const cardBg = isDark ? '#2a2a2a' : '#ffffff';
+  const borderColor = isDark ? '#3a3a3a' : '#e0e0e0';
+  const subtleBg = isDark ? '#222222' : '#fafafa';
+  const textPrimary = isDark ? '#e0e0e0' : '#333333';
+  const textSecondary = isDark ? '#888888' : '#666666';
+  const textMuted = isDark ? '#666666' : '#999999';
+
   return (
-    <div className="h-screen flex flex-col bg-[#f5f5f5]">
+    <div className="h-screen flex flex-col" style={{ backgroundColor: tBg, color: textPrimary }}>
       <input
         type="file"
         ref={fileInputRef}
@@ -696,12 +880,49 @@ export default function App() {
         accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar,.glb,.gltf,.fbx,.obj,.stl,.3ds,.dae,.off,.ply,.wrl,.3mf"
         onChange={handleFileChange}
       />
-      <div className="flex items-center justify-between px-4 py-2 border-b border-[#e0e0e0] bg-white">
+
+      <div className="flex items-center justify-between px-4 py-2 border-b" style={{ borderColor, backgroundColor: cardBg }}>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setDayWidth(Math.max(DAY_WIDTH_MIN, dayWidth - 15))}
+            className="px-2 py-1 text-xs rounded hover:opacity-80 transition-colors"
+            style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0', color: textPrimary }}
+          >
+            −
+          </button>
+          <span className="text-[10px] w-12 text-center" style={{ color: textMuted }}>{dayWidth}px</span>
+          <button
+            onClick={() => setDayWidth(Math.min(DAY_WIDTH_MAX, dayWidth + 15))}
+            className="px-2 py-1 text-xs rounded hover:opacity-80 transition-colors"
+            style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0', color: textPrimary }}
+          >
+            +
+          </button>
+          <div className="w-px h-4 mx-1" style={{ backgroundColor: borderColor }} />
+          <button
+            onClick={handleUndo}
+            disabled={historyIdx <= 0}
+            className={`px-2 py-1 text-xs rounded hover:opacity-80 transition-colors ${historyIdx <= 0 ? 'cursor-not-allowed opacity-40' : ''}`}
+            style={{ backgroundColor: isDark ? '#2a2a2a' : '#e0e0e0', color: textPrimary }}
+            title="Deshacer"
+          >
+            <TbArrowBackUp size={14} />
+          </button>
+          <button
+            onClick={handleRedo}
+            disabled={historyIdx >= history.length - 1}
+            className={`px-2 py-1 text-xs rounded hover:opacity-80 transition-colors ${historyIdx >= history.length - 1 ? 'cursor-not-allowed opacity-40' : ''}`}
+            style={{ backgroundColor: isDark ? '#2a2a2a' : '#e0e0e0', color: textPrimary }}
+            title="Rehacer"
+          >
+            <TbArrowForwardUp size={14} />
+          </button>
+        </div>
         <h1 className="text-base font-semibold tracking-tight">Roadmapper</h1>
         <div className="flex items-center gap-2">
           {linkMode && (
-            <span className="text-xs text-orange-600 bg-orange-100 px-2 py-1 rounded">
-              Haz click en una tarea destino para crear la dependencia
+            <span className="text-[10px] text-orange-600 bg-orange-100 px-2 py-1 rounded">
+              Click en tarea destino
               <button
                 onClick={() => setLinkMode(null)}
                 className="ml-2 text-orange-800 font-bold"
@@ -711,91 +932,180 @@ export default function App() {
             </span>
           )}
           <button
-            onClick={handleUndo}
-            disabled={historyIdx <= 0}
-            className={`px-2 py-1 text-xs rounded ${historyIdx <= 0 ? 'bg-[#f0f0f0] text-gray-300 cursor-not-allowed' : 'bg-[#e0e0e0] hover:bg-[#d0d0d0] text-gray-700'}`}
-            title="Deshacer"
+            onClick={toggleTheme}
+            className="px-2 py-1 text-xs rounded hover:opacity-80 transition-colors"
+            style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0', color: textPrimary }}
+            title={isDark ? 'Tema claro' : 'Tema oscuro'}
           >
-            <TbArrowBackUp size={16} />
-          </button>
-          <button
-            onClick={handleRedo}
-            disabled={historyIdx >= history.length - 1}
-            className={`px-2 py-1 text-xs rounded ${historyIdx >= history.length - 1 ? 'bg-[#f0f0f0] text-gray-300 cursor-not-allowed' : 'bg-[#e0e0e0] hover:bg-[#d0d0d0] text-gray-700'}`}
-            title="Rehacer"
-          >
-            <TbArrowForwardUp size={16} />
-          </button>
-          <button
-            onClick={() => setDayWidth(Math.max(DAY_WIDTH_MIN, dayWidth - 15))}
-            className="px-2 py-1 text-xs bg-[#e0e0e0] hover:bg-[#d0d0d0] rounded"
-          >
-            −
-          </button>
-          <span className="text-xs text-gray-500 w-16 text-center">{dayWidth}px</span>
-          <button
-            onClick={() => setDayWidth(Math.min(DAY_WIDTH_MAX, dayWidth + 15))}
-            className="px-2 py-1 text-xs bg-[#e0e0e0] hover:bg-[#d0d0d0] rounded"
-          >
-            +
-          </button>
-          <button
-            onClick={addTask}
-            className="ml-4 px-3 py-1 text-xs bg-[#4caf50] hover:bg-[#43a047] text-white rounded font-medium"
-          >
-            + Nueva tarea
+            {isDark ? <TbSun size={16} /> : <TbMoon size={16} />}
           </button>
         </div>
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        <div className="w-48 border-r border-[#e0e0e0] bg-white flex-shrink-0 overflow-y-auto">
-          <div className="h-14 border-b border-[#e0e0e0] bg-[#fafafa] flex items-end px-2">
-            <span className="text-[10px] text-gray-400 font-medium pb-1">Tarea</span>
-          </div>
-          {tasks.map((task) => (
-            <div
-              key={task.id}
-              className="flex items-center border-b border-[#e0e0e0] px-2"
-              style={{ height: ROW_HEIGHT }}
+        <div className="w-48 border-r flex-shrink-0 overflow-y-auto" style={{ borderColor, backgroundColor: cardBg }}>
+          <div className="border-b" style={{ borderColor, backgroundColor: subtleBg }} />
+
+          <div className="relative" ref={addDropdownRef}>
+            <button
+              onClick={() => setShowAddDropdown(!showAddDropdown)}
+              className="w-full flex items-center justify-center gap-1 px-2 py-2 text-xs font-medium border-b hover:opacity-80 transition-colors"
+              style={{ borderColor, color: '#4caf50' }}
             >
-              <div
-                className="w-2 h-2 rounded-full mr-2 flex-shrink-0"
-                style={{ backgroundColor: task.color || '#4caf50' }}
-              />
-              <input
-                className="flex-1 text-xs font-medium bg-transparent border-none outline-none"
-                defaultValue={task.name}
-                onBlur={(e) => {
-                  if (e.target.value !== task.name) {
-                    updateTask(task.id, { name: e.target.value });
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                }}
-              />
-              <input
-                className="w-14 text-[10px] text-gray-400 bg-transparent border-none outline-none text-right"
-                defaultValue={task.estimate || ''}
-                placeholder="est."
-                onBlur={(e) => {
-                  if (e.target.value !== (task.estimate || '')) {
-                    updateTask(task.id, { estimate: e.target.value });
-                  }
-                }}
-                onKeyDown={(e) => {
-                  if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                }}
-              />
-              <button
-                onClick={() => deleteTask(task.id)}
-                className="ml-1 text-gray-300 hover:text-red-500 text-xs font-bold"
-              >
-                ×
-              </button>
-            </div>
-          ))}
+              Agregar <TbChevronDown size={12} />
+            </button>
+            {showAddDropdown && (
+              <div className="absolute left-0 right-0 z-50 border-b" style={{ backgroundColor: cardBg, borderColor }}>
+                <button
+                  className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+                  style={{ color: textPrimary }}
+                  onClick={() => {
+                    addTask();
+                    setShowAddDropdown(false);
+                  }}
+                >
+                  <TbFileText size={14} /> Agregar tarea
+                </button>
+                <button
+                  className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+                  style={{ color: textPrimary }}
+                  onClick={() => {
+                    addGroup();
+                    setShowAddDropdown(false);
+                  }}
+                >
+                  <TbFolder size={14} /> Agregar grupo
+                </button>
+              </div>
+            )}
+          </div>
+
+          {(() => {
+            const sidebarDragHighlight = (groupId: number | null) =>
+              sidebarDragOverGroupId === groupId && sidebarDragTaskId !== null;
+
+            return (
+              <>
+                {groups.map(group => {
+                  const groupTasks = tasks.filter(t => t.group_id === group.id);
+                  return (
+                    <div key={`group-sidebar-${group.id}`}>
+                      <div
+                        className="flex items-center border-b px-2"
+                        style={{
+                          height: GROUP_HEADER_HEIGHT,
+                          borderColor,
+                          backgroundColor: sidebarDragHighlight(group.id)
+                            ? hexToRgba(group.color, 0.25)
+                            : subtleBg,
+                          borderLeft: `3px solid ${group.color}`,
+                        }}
+                        onDragOver={(e) => handleGroupDragOver(e, group.id)}
+                        onDrop={(e) => handleGroupDrop(e, group.id)}
+                        onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
+                      >
+                        <button
+                          onClick={() => toggleGroupCollapse(group.id)}
+                          className="mr-0.5 flex-shrink-0"
+                          style={{ color: textMuted }}
+                        >
+                          {group.collapsed ? <TbChevronRight size={9} /> : <TbChevronDown size={9} />}
+                        </button>
+                        <span className="flex-1 text-[9px] font-semibold truncate" style={{ color: textPrimary }}>
+                          {group.name}
+                        </span>
+                        <button
+                          onClick={() => deleteGroup(group.id)}
+                          className="text-gray-300 hover:text-red-500 text-[9px] font-bold"
+                        >
+                          ×
+                        </button>
+                      </div>
+                      {!group.collapsed && groupTasks.map(task => (
+                        <div
+                          key={task.id}
+                          className="flex items-center border-b"
+                          style={{
+                            height: ROW_HEIGHT,
+                            borderColor,
+                            backgroundColor: hexToRgba(group.color, 0.08),
+                            borderLeft: `3px solid ${group.color}`,
+                            transition: 'background-color 0.15s ease, opacity 0.15s ease',
+                          }}
+                          draggable
+                          onDragStart={(e) => handleSidebarDragStart(e, task.id)}
+                          onDragEnd={handleSidebarDragEnd}
+                        >
+                          <div
+                            className="w-2 h-2 rounded-full mx-2 flex-shrink-0"
+                            style={{ backgroundColor: task.color || '#4caf50' }}
+                          />
+                          <span className="flex-1 text-xs font-medium truncate px-1" style={{ color: textPrimary }}>
+                            {task.name}
+                          </span>
+                          <span className="text-[10px] px-1 mr-1 flex-shrink-0" style={{ color: textMuted }}>
+                            {task.estimate ? `${task.estimate}` : ''}
+                          </span>
+                          <button
+                            onClick={() => deleteTask(task.id)}
+                            className="mr-2 text-gray-300 hover:text-red-500 text-xs font-bold flex-shrink-0"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })}
+                <div
+                  className="border-b px-2 flex items-center"
+                  style={{
+                    height: GROUP_HEADER_HEIGHT,
+                    borderColor,
+                    color: sidebarDragHighlight(null) ? '#4caf50' : textMuted,
+                    backgroundColor: sidebarDragHighlight(null)
+                      ? 'rgba(76,175,80,0.1)' : undefined,
+                  }}
+                  onDragOver={(e) => handleGroupDragOver(e, null)}
+                  onDrop={(e) => handleGroupDrop(e, null)}
+                  onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
+                >
+                  <span className="text-[9px] font-semibold">Sin grupo</span>
+                </div>
+                {ungroupedTasks.map(task => (
+                  <div
+                    key={task.id}
+                    className="flex items-center border-b"
+                    style={{
+                      height: ROW_HEIGHT,
+                      borderColor,
+                      transition: 'background-color 0.15s ease, opacity 0.15s ease',
+                    }}
+                    draggable
+                    onDragStart={(e) => handleSidebarDragStart(e, task.id)}
+                    onDragEnd={handleSidebarDragEnd}
+                  >
+                    <div
+                      className="w-2 h-2 rounded-full mx-2 flex-shrink-0"
+                      style={{ backgroundColor: task.color || '#4caf50' }}
+                    />
+                    <span className="flex-1 text-xs font-medium truncate px-1" style={{ color: textPrimary }}>
+                      {task.name}
+                    </span>
+                    <span className="text-[10px] px-1 mr-1 flex-shrink-0" style={{ color: textMuted }}>
+                      {task.estimate ? `${task.estimate}` : ''}
+                    </span>
+                    <button
+                      onClick={() => deleteTask(task.id)}
+                      className="mr-2 text-gray-300 hover:text-red-500 text-xs font-bold flex-shrink-0"
+                    >
+                      ×
+                    </button>
+                  </div>
+                ))}
+              </>
+            );
+          })()}
         </div>
 
         <div
@@ -807,13 +1117,13 @@ export default function App() {
             ref={calendarContainerRef}
             style={{ minWidth: numDays * dayWidth }}
           >
-            <div className="h-px bg-[#e0e0e0]" />
-            <div className="flex border-b border-[#e0e0e0] bg-[#fafafa] sticky top-0 z-10">
+            <div className="h-px" style={{ backgroundColor: borderColor }} />
+            <div className="flex border-b sticky top-0 z-10" style={{ borderColor, backgroundColor: subtleBg }}>
               {weeks.map((week, wi) => (
                 <div key={wi} className="flex" style={{ width: week.days.length * dayWidth }}>
                   <div
-                    className="text-[10px] text-gray-400 font-medium px-1 py-1"
-                    style={{ width: week.days.length * dayWidth }}
+                    className="text-[10px] font-medium px-1 py-1"
+                    style={{ width: week.days.length * dayWidth, color: textMuted }}
                   >
                     {format(week.weekStart, 'MMM yyyy', { locale: es })}
                   </div>
@@ -821,29 +1131,85 @@ export default function App() {
               ))}
             </div>
 
-            <div className="flex border-b border-[#e0e0e0] bg-[#fafafa] sticky top-0 z-10">
+            <div className="flex border-b sticky top-0 z-10" style={{ borderColor, backgroundColor: subtleBg }}>
               {calendarDays.map((day, i) => {
                 const dayOfWeek = day.getDay();
                 const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
                 return (
                   <div
                     key={i}
-                    className="text-center border-r border-[#e0e0e0]"
+                    className="text-center border-r"
                     style={{
                       width: dayWidth,
-                      backgroundColor: isWeekend ? '#f0f0f0' : '#fafafa',
+                      borderColor,
+                      backgroundColor: isWeekend ? (isDark ? '#252525' : '#f0f0f0') : subtleBg,
                     }}
                   >
-                    <div className="text-[10px] text-gray-400">{dayNames[(dayOfWeek + 6) % 7]}</div>
-                    <div className="h-px bg-[#e0e0e0] my-0.5" />
+                    <div className="text-[10px]" style={{ color: textMuted }}>{dayNames[(dayOfWeek + 6) % 7]}</div>
+                    <div className="h-px my-0.5" style={{ backgroundColor: borderColor }} />
                     <div className="text-[10px] font-medium">{format(day, 'd')}</div>
                   </div>
                 );
               })}
             </div>
 
-            <div className="relative" style={{ height: tasks.length * ROW_HEIGHT }}>
-              {tasks.map((task, taskIdx) => {
+            <div className="relative" style={{
+              height: sidebarRows.reduce((total, row) => {
+                if (row.type === 'task') return total + ROW_HEIGHT;
+                return total + GROUP_HEADER_HEIGHT;
+              }, 0)
+            }}>
+              {sidebarRows.map((row, rowIdx) => {
+                if (row.type === 'group-header') {
+                  const group = groups.find(g => g.id === row.groupId);
+                  if (!group) return null;
+                  const topPx = sidebarRows.slice(0, rowIdx).reduce((t, r) => t + (r.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT), 0);
+                  return (
+                    <div
+                      key={`cal-group-row-${group.id}`}
+                      className="absolute left-0 w-full border-b"
+                      style={{
+                        top: topPx,
+                        height: GROUP_HEADER_HEIGHT,
+                        backgroundColor: hexToRgba(group.color, 0.08),
+                        borderBottom: `2px solid ${hexToRgba(group.color, 0.4)}`,
+                        borderLeft: `3px solid ${group.color}`,
+                        zIndex: 1,
+                      }}
+                    >
+                      <span
+                        className="text-[8px] font-bold px-1 rounded"
+                        style={{
+                          color: group.color,
+                        }}
+                      >
+                        {group.name}
+                      </span>
+                    </div>
+                  );
+                }
+
+                if (row.type === 'ungrouped-header') {
+                  const topPx = sidebarRows.slice(0, rowIdx).reduce((t, r) => t + (r.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT), 0);
+                  return (
+                    <div
+                      key="cal-ungrouped-header"
+                      className="absolute left-0 w-full border-b"
+                      style={{
+                        top: topPx,
+                        height: GROUP_HEADER_HEIGHT,
+                        borderBottom: `1px solid ${borderColor}`,
+                      }}
+                    >
+                      <span className="text-[8px] font-medium px-1" style={{ color: textMuted }}>
+                        Sin grupo
+                      </span>
+                    </div>
+                  );
+                }
+
+                const task = row.task!;
+                const topPx = sidebarRows.slice(0, rowIdx).reduce((t, r) => t + (r.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT), 0);
                 const startIdx = getDayIndex(task.start_date, viewStart);
                 const endIdx = getDayIndex(task.end_date, viewStart);
                 const duration = endIdx - startIdx;
@@ -865,29 +1231,32 @@ export default function App() {
                 }
 
                 const bgColor = task.color || '#4caf50';
-                const borderColor = darkenColor(bgColor, 0.7);
+                const taskBorderColor = darkenColor(bgColor, 0.7);
                 const isLinkTarget = linkMode && linkMode.fromTaskId !== task.id;
                 const isInvalid = hasInvalidDependencies(task);
+                const errorMsg = isInvalid ? getDependencyErrorMessageForTask(task) : null;
+                const isHovered = hoveredTask === task.id;
 
                 return (
                   <div
                     key={task.id}
                     className="absolute left-0 w-full"
-                    style={{ top: taskIdx * ROW_HEIGHT, height: ROW_HEIGHT }}
+                    style={{ top: topPx, height: ROW_HEIGHT }}
                     onContextMenu={(e) => handleContextMenu(e, task.id)}
                   >
-                    <div className="border-t border-[#e0e0e0] mx-2" />
+                    <div className="border-t mx-2" style={{ borderColor }} />
                     {calendarDays.map((day, i) => {
                       const dayOfWeek = day.getDay();
                       const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
                       return (
                         <div
                           key={i}
-                          className="absolute top-0 h-full border-r border-[#e0e0e0]"
+                          className="absolute top-0 h-full border-r"
                           style={{
                             left: i * dayWidth,
                             width: dayWidth,
-                            backgroundColor: isWeekend ? '#f0f0f0' : i % 2 === 0 ? '#ffffff' : '#fafafa',
+                            borderColor,
+                            backgroundColor: isWeekend ? (isDark ? '#252525' : '#f0f0f0') : i % 2 === 0 ? (isDark ? '#1e1e1e' : '#ffffff') : subtleBg,
                           }}
                         />
                       );
@@ -905,11 +1274,13 @@ export default function App() {
                           ? `2px dashed #ff9800`
                           : isInvalid
                           ? `2px solid #f44336`
-                          : `1px solid ${borderColor}`,
+                          : `1px solid ${taskBorderColor}`,
                         cursor: dragging && dragging.taskId === task.id ? 'grabbing' : linkMode ? 'pointer' : 'grab',
                         zIndex: dragging && dragging.taskId === task.id ? 10 : 2,
                         opacity: linkMode && !isLinkTarget ? 0.6 : 1,
-                        boxShadow: isInvalid ? `0 0 8px rgba(244, 67, 54, 0.6)` : 'none',
+                        boxShadow: isInvalid ? `0 0 8px rgba(244, 67, 54, 0.6)` : isHovered ? `0 2px 8px rgba(0,0,0,0.3)` : 'none',
+                        transform: isHovered && !(dragging && dragging.taskId === task.id) ? 'scaleY(1.08)' : 'scaleY(1)',
+                        transition: 'transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease',
                       }}
                       onMouseDown={(e) => {
                         if (linkMode) {
@@ -923,10 +1294,10 @@ export default function App() {
                         }
                         handleMouseDown(e, task.id, 'move', task.start_date, task.end_date);
                       }}
+                      onMouseEnter={() => setHoveredTask(task.id)}
+                      onMouseLeave={() => setHoveredTask(null)}
                     >
-                      <div
-                        className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none"
-                      >
+                      <div className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none">
                         <span
                           className="text-[10px] font-bold text-white truncate px-1"
                           style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}
@@ -934,6 +1305,37 @@ export default function App() {
                           {task.name}
                         </span>
                       </div>
+                      {isInvalid && errorMsg && isHovered && (
+                        <div
+                          className="absolute z-20 px-2 py-1 rounded text-[10px] font-medium text-white whitespace-nowrap pointer-events-none"
+                          style={{
+                            bottom: '100%',
+                            left: '50%',
+                            transform: 'translateX(-50%)',
+                            marginBottom: 4,
+                            backgroundColor: '#f44336',
+                          }}
+                        >
+                          <TbAlertTriangle size={10} className="inline mr-1" />
+                          {errorMsg}
+                        </div>
+                      )}
+                      {isInvalid && !isHovered && (
+                        <div
+                          className="absolute flex items-center justify-center"
+                          style={{
+                            top: -4,
+                            right: -4,
+                            width: 14,
+                            height: 14,
+                            borderRadius: '50%',
+                            backgroundColor: '#f44336',
+                            zIndex: 11,
+                          }}
+                        >
+                          <TbAlertTriangle size={9} className="text-white" />
+                        </div>
+                      )}
                       <div
                         className="absolute left-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-l-[3px]"
                         onMouseDown={(e) => {
@@ -985,11 +1387,12 @@ export default function App() {
       {contextMenu && (
         <div
           ref={contextMenuRef}
-          className="fixed z-50 bg-white border border-[#e0e0e0] rounded-lg shadow-xl py-1 min-w-[200px] anim-context-menu"
-          style={{ left: contextMenu.x, top: contextMenu.y }}
+          className="fixed z-50 border rounded-lg shadow-xl py-1 min-w-[200px] anim-context-menu"
+          style={{ left: contextMenu.x, top: contextMenu.y, backgroundColor: cardBg, borderColor }}
         >
           <button
-            className="w-full px-4 py-2 text-left text-xs hover:bg-[#f0f0f0] flex items-center gap-2"
+            className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+            style={{ color: textPrimary }}
             onClick={() => {
               setDetailModal({ taskId: contextMenu.taskId });
               setContextMenu(null);
@@ -998,11 +1401,11 @@ export default function App() {
             <TbFileText size={14} /> Detalles
           </button>
 
-          <div className="border-t border-[#e0e0e0] my-1" />
+          <div className="border-t my-1" style={{ borderColor }} />
 
           {colorPickerFor === contextMenu.taskId ? (
             <div className="px-4 py-2">
-              <div className="text-[10px] text-gray-400 mb-2">Color de la tarea</div>
+              <div className="text-[10px] mb-2" style={{ color: textMuted }}>Color de la tarea</div>
               <div className="grid grid-cols-5 gap-1">
                 {PRESET_COLORS.map(color => {
                   const task = tasks.find(t => t.id === contextMenu.taskId);
@@ -1026,7 +1429,8 @@ export default function App() {
             </div>
           ) : (
             <button
-              className="w-full px-4 py-2 text-left text-xs hover:bg-[#f0f0f0] flex items-center gap-2"
+              className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+              style={{ color: textPrimary }}
               onClick={() => {
                 setColorPickerFor(contextMenu.taskId);
               }}
@@ -1035,10 +1439,40 @@ export default function App() {
             </button>
           )}
 
-          <div className="border-t border-[#e0e0e0] my-1" />
+          <div className="border-t my-1" style={{ borderColor }} />
+
+          {(() => {
+            const task = tasks.find(t => t.id === contextMenu.taskId);
+            if (!task) return null;
+            const otherGroups = groups;
+            if (otherGroups.length > 0) {
+              return (
+                <div className="px-4 py-2">
+                  <div className="text-[10px] mb-1" style={{ color: textMuted }}>Grupo:</div>
+                  <select
+                    className="w-full text-xs border rounded px-2 py-1"
+                    style={{ borderColor, backgroundColor: cardBg, color: textPrimary }}
+                    defaultValue={task.group_id || ''}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      updateTask(task.id, { group_id: val ? parseInt(val) : null });
+                      setContextMenu(null);
+                    }}
+                  >
+                    <option value="">Sin grupo</option>
+                    {otherGroups.map(g => (
+                      <option key={g.id} value={g.id}>{g.name}</option>
+                    ))}
+                  </select>
+                </div>
+              );
+            }
+            return null;
+          })()}
 
           <button
-            className="w-full px-4 py-2 text-left text-xs hover:bg-[#f0f0f0] flex items-center gap-2"
+            className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+            style={{ color: textPrimary }}
             onClick={() => {
               setLinkMode({ fromTaskId: contextMenu.taskId });
               setContextMenu(null);
@@ -1050,7 +1484,7 @@ export default function App() {
           {tasks.find(t => t.id === contextMenu.taskId)?.dependencies &&
            tasks.find(t => t.id === contextMenu.taskId)!.dependencies.length > 0 && (
             <div className="px-4 py-2">
-              <div className="text-[10px] text-gray-400 mb-1">Dependencias:</div>
+              <div className="text-[10px] mb-1" style={{ color: textMuted }}>Dependencias:</div>
               {tasks.find(t => t.id === contextMenu.taskId)!.dependencies.map(depId => {
                 const depTask = tasks.find(t => t.id === depId);
                 if (!depTask) return null;
@@ -1084,7 +1518,7 @@ export default function App() {
             </div>
           )}
 
-          <div className="border-t border-[#e0e0e0] my-1" />
+          <div className="border-t my-1" style={{ borderColor }} />
 
           <button
             className="w-full px-4 py-2 text-left text-xs hover:bg-red-50 text-red-500 flex items-center gap-2"
@@ -1148,7 +1582,8 @@ export default function App() {
             onClick={() => setDetailModal(null)}
           >
             <div
-              className="bg-white rounded-xl shadow-2xl w-[420px] max-h-[80vh] overflow-y-auto anim-modal"
+              className="rounded-xl shadow-2xl w-[420px] max-h-[80vh] overflow-y-auto anim-modal"
+              style={{ backgroundColor: cardBg }}
               onClick={(e) => e.stopPropagation()}
             >
               <div
@@ -1159,7 +1594,8 @@ export default function App() {
                   Detalles de la tarea
                 </h2>
                 <button
-                  className="text-gray-400 hover:text-gray-600 text-lg font-bold"
+                  className="text-lg font-bold"
+                  style={{ color: textMuted }}
                   onClick={() => setDetailModal(null)}
                 >
                   <TbX size={18} />
@@ -1168,9 +1604,10 @@ export default function App() {
 
               <div className="px-6 py-4 space-y-4">
                 <div>
-                  <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Nombre</label>
+                  <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Nombre</label>
                   <input
-                    className="w-full mt-1 px-3 py-2 text-xs border border-[#e0e0e0] rounded-lg outline-none focus:border-[#4caf50]"
+                    className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none"
+                    style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }}
                     defaultValue={task.name}
                     onBlur={(e) => {
                       if (e.target.value !== task.name) {
@@ -1191,9 +1628,10 @@ export default function App() {
                   onDragLeave={() => setDragOverTaskId(null)}
                   onDrop={(e) => handleDropZone(e, task.id)}
                 >
-                  <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Notas</label>
+                  <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Notas</label>
                   <textarea
-                    className="w-full mt-1 px-3 py-2 text-xs border border-[#e0e0e0] rounded-lg outline-none focus:border-[#4caf50] min-h-[60px] resize-y"
+                    className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none min-h-[60px] resize-y"
+                    style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }}
                     defaultValue={task.notes || ''}
                     placeholder="Agregar notas..."
                     onBlur={(e) => {
@@ -1203,7 +1641,8 @@ export default function App() {
                   />
                   <div className="flex items-center gap-2 mt-2">
                     <button
-                      className="flex items-center gap-1 px-2 py-1 text-[10px] bg-[#f0f0f0] hover:bg-[#e0e0e0] rounded text-gray-600"
+                      className="flex items-center gap-1 px-2 py-1 text-[10px] rounded text-gray-600"
+                      style={{ backgroundColor: isDark ? '#3a3a3a' : '#f0f0f0' }}
                       onClick={() => handleAttachFile(task.id)}
                     >
                       <TbPaperclip size={12} /> Adjuntar archivo
@@ -1213,11 +1652,11 @@ export default function App() {
                     <div className="mt-2 space-y-1">
                       {Object.entries(uploadProgress).map(([key, pct]) => (
                         <div key={key}>
-                          <div className="flex items-center justify-between text-[10px] text-gray-500 mb-0.5">
+                          <div className="flex items-center justify-between text-[10px] mb-0.5" style={{ color: textMuted }}>
                             <span className="truncate max-w-[280px]">{key.split('-').slice(0, -1).join('-')}</span>
                             <span>{pct}%</span>
                           </div>
-                          <div className="w-full h-1.5 bg-[#e0e0e0] rounded-full overflow-hidden">
+                          <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0' }}>
                             <div
                               className="h-full rounded-full transition-all duration-200"
                               style={{
@@ -1230,7 +1669,7 @@ export default function App() {
                       ))}
                     </div>
                   )}
-                  <div className="flex items-center gap-1 mt-1 text-[10px] text-gray-400">
+                  <div className="flex items-center gap-1 mt-1 text-[10px]" style={{ color: textMuted }}>
                     <TbPhoto size={12} />
                     <span>Arrastrá archivos aquí o pegá imágenes con Ctrl+V</span>
                   </div>
@@ -1238,7 +1677,7 @@ export default function App() {
 
                 {task.attachments && task.attachments.length > 0 && (
                   <div>
-                    <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">
+                    <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>
                       Archivos adjuntos ({task.attachments.length})
                     </label>
                     <div className="mt-2 grid grid-cols-3 gap-2">
@@ -1246,7 +1685,7 @@ export default function App() {
                         const cat = getFileCategory(att.file_type, att.file_name);
                         if (cat === 'image') {
                           return (
-                            <div key={att.id} className="relative group cursor-pointer rounded-lg overflow-hidden border border-[#e0e0e0] bg-[#fafafa]">
+                            <div key={att.id} className="relative group cursor-pointer rounded-lg overflow-hidden border" style={{ borderColor, backgroundColor: subtleBg }}>
                               <img
                                 src={att.file_data}
                                 alt={att.file_name}
@@ -1267,7 +1706,7 @@ export default function App() {
                         }
                         if (cat === 'video') {
                           return (
-                            <div key={att.id} className="relative group rounded-lg overflow-hidden border border-[#e0e0e0] bg-black">
+                            <div key={att.id} className="relative group rounded-lg overflow-hidden border bg-black" style={{ borderColor }}>
                               <video
                                 src={att.file_data}
                                 controls
@@ -1287,10 +1726,10 @@ export default function App() {
                         }
                         if (cat === 'audio') {
                           return (
-                            <div key={att.id} className="relative group rounded-lg overflow-hidden border border-[#e0e0e0] bg-[#fafafa] p-2">
+                            <div key={att.id} className="relative group rounded-lg overflow-hidden border p-2" style={{ borderColor, backgroundColor: subtleBg }}>
                               <div className="flex items-center gap-1 mb-1">
-                                <TbPaperclip size={12} className="text-gray-400" />
-                                <span className="text-[9px] text-gray-500 truncate">{att.file_name}</span>
+                                <TbPaperclip size={12} style={{ color: textMuted }} />
+                                <span className="text-[9px] truncate" style={{ color: textMuted }}>{att.file_name}</span>
                               </div>
                               <audio src={att.file_data} controls className="w-full h-8" />
                               <button
@@ -1304,7 +1743,7 @@ export default function App() {
                         }
                         if (cat === '3d') {
                           return (
-                            <div key={att.id} className="relative group rounded-lg overflow-hidden border border-[#e0e0e0] bg-[#1a1a1a] cursor-pointer" onClick={() => setPreviewAttachment(att)}>
+                            <div key={att.id} className="relative group rounded-lg overflow-hidden border cursor-pointer" style={{ borderColor, backgroundColor: '#1a1a1a' }} onClick={() => setPreviewAttachment(att)}>
                               <div style={{ width: '100%', height: '80px' }}>
                                 <Viewer3D src={att.file_data} fileName={att.file_name} />
                               </div>
@@ -1321,10 +1760,10 @@ export default function App() {
                           );
                         }
                         return (
-                          <div key={att.id} className="relative group rounded-lg overflow-hidden border border-[#e0e0e0] bg-[#fafafa] p-2">
+                          <div key={att.id} className="relative group rounded-lg overflow-hidden border p-2" style={{ borderColor, backgroundColor: subtleBg }}>
                             <div className="flex items-center gap-1">
-                              <TbPaperclip size={12} className="text-gray-400" />
-                              <span className="text-[9px] text-gray-600 truncate">{att.file_name}</span>
+                              <TbPaperclip size={12} style={{ color: textMuted }} />
+                              <span className="text-[9px] truncate" style={{ color: textSecondary }}>{att.file_name}</span>
                             </div>
                             <div className="flex gap-1 mt-1">
                               <a
@@ -1350,10 +1789,11 @@ export default function App() {
 
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Inicio</label>
+                    <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Inicio</label>
                     <input
                       type="date"
-                      className="w-full mt-1 px-3 py-2 text-xs border border-[#e0e0e0] rounded-lg outline-none focus:border-[#4caf50]"
+                      className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none"
+                      style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }}
                       defaultValue={task.start_date}
                       onChange={(e) => {
                         updateTask(task.id, { start_date: e.target.value });
@@ -1361,10 +1801,11 @@ export default function App() {
                     />
                   </div>
                   <div>
-                    <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Fin</label>
+                    <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Fin</label>
                     <input
                       type="date"
-                      className="w-full mt-1 px-3 py-2 text-xs border border-[#e0e0e0] rounded-lg outline-none focus:border-[#4caf50]"
+                      className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none"
+                      style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }}
                       defaultValue={task.end_date}
                       onChange={(e) => {
                         updateTask(task.id, { end_date: e.target.value });
@@ -1374,9 +1815,10 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Estado</label>
+                  <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Estado</label>
                   <select
-                    className="w-full mt-1 px-3 py-2 text-xs border border-[#e0e0e0] rounded-lg outline-none focus:border-[#4caf50]"
+                    className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none"
+                    style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }}
                     defaultValue={task.status || 'pendiente'}
                     onChange={(e) => {
                       updateTask(task.id, { status: e.target.value });
@@ -1389,7 +1831,7 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">Color</label>
+                  <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Color</label>
                   <div className="flex gap-2 mt-2 flex-wrap">
                     {PRESET_COLORS.map(color => (
                       <button
@@ -1408,7 +1850,7 @@ export default function App() {
                 </div>
 
                 <div>
-                  <label className="text-[10px] text-gray-400 font-medium uppercase tracking-wide">
+                  <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>
                     Dependencias ({task.dependencies?.length || 0})
                   </label>
                   {task.dependencies && task.dependencies.length > 0 ? (
@@ -1417,7 +1859,7 @@ export default function App() {
                         const depTask = tasks.find(t => t.id === depId);
                         if (!depTask) return null;
                         return (
-                          <div key={depId} className="flex items-center justify-between px-3 py-2 bg-[#fafafa] rounded-lg">
+                          <div key={depId} className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ backgroundColor: subtleBg }}>
                             <span className="flex items-center gap-2 text-xs">
                               <div
                                 className="w-2.5 h-2.5 rounded-full"
@@ -1444,7 +1886,7 @@ export default function App() {
                       })}
                     </div>
                   ) : (
-                    <p className="text-[11px] text-gray-400 mt-2">Sin dependencias</p>
+                    <p className="text-[11px] mt-2" style={{ color: textMuted }}>Sin dependencias</p>
                   )}
                 </div>
               </div>

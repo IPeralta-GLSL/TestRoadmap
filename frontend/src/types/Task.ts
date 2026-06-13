@@ -18,4 +18,14 @@ export interface Task {
   dependencies: number[];
   notes: string | null;
   attachments: Attachment[];
+  group_id: number | null;
+  position: number;
+}
+
+export interface TaskGroup {
+  id: number;
+  name: string;
+  color: string;
+  collapsed: number;
+  position: number;
 }

@@ -45,6 +45,15 @@ db.exec(`
 `);
 
 db.exec(`
+  CREATE TABLE IF NOT EXISTS task_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    color TEXT DEFAULT '#607d8b',
+    collapsed INTEGER DEFAULT 0
+  )
+`);
+
+db.exec(`
   CREATE TABLE IF NOT EXISTS task_attachments (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     task_id INTEGER NOT NULL,
@@ -59,6 +68,12 @@ db.exec(`
 const migrateTasks = () => {
   const cols = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
   const colNames = cols.map(c => c.name);
+  if (!colNames.includes('group_id')) {
+    db.exec("ALTER TABLE tasks ADD COLUMN group_id INTEGER REFERENCES task_groups(id) ON DELETE SET NULL");
+  }
+  if (!colNames.includes('position')) {
+    db.exec("ALTER TABLE tasks ADD COLUMN position INTEGER DEFAULT 0");
+  }
   if (!colNames.includes('color')) {
     db.exec("ALTER TABLE tasks ADD COLUMN color TEXT DEFAULT '#4caf50'");
   }
@@ -69,6 +84,18 @@ const migrateTasks = () => {
     db.exec("ALTER TABLE tasks ADD COLUMN notes TEXT DEFAULT ''");
   }
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='task_attachments'").all();
+  const groupTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='task_groups'").all();
+  if (groupTables.length === 0) {
+db.exec(`
+  CREATE TABLE IF NOT EXISTS task_groups (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    color TEXT DEFAULT '#607d8b',
+    collapsed INTEGER DEFAULT 0,
+    position INTEGER DEFAULT 0
+  )
+`);
+  }
   if (tables.length === 0) {
     db.exec(`
       CREATE TABLE IF NOT EXISTS task_attachments (
@@ -84,6 +111,59 @@ const migrateTasks = () => {
   }
 };
 migrateTasks();
+
+app.get('/api/groups', (_req, res) => {
+  try {
+    const groups = db.prepare('SELECT * FROM task_groups').all();
+    res.json(groups);
+  } catch (error) {
+    res.status(500).json({ error: 'Error fetching groups' });
+  }
+});
+
+app.post('/api/groups', (req, res) => {
+  try {
+    const { name, color } = req.body;
+    const stmt = db.prepare('INSERT INTO task_groups (name, color) VALUES (?, ?)');
+    const result = stmt.run(name, color || '#607d8b');
+    const group = db.prepare('SELECT * FROM task_groups WHERE id = ?').get(result.lastInsertRowid);
+    io.emit('group-created', group);
+    res.status(201).json(group);
+  } catch (error) {
+    res.status(500).json({ error: 'Error creating group' });
+  }
+});
+
+app.put('/api/groups/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, color, collapsed } = req.body;
+    const existing = db.prepare('SELECT * FROM task_groups WHERE id = ?').get(id) as any;
+    if (!existing) {
+      res.status(404).json({ error: 'Group not found' });
+      return;
+    }
+    db.prepare('UPDATE task_groups SET name = ?, color = ?, collapsed = ? WHERE id = ?')
+      .run(name ?? existing.name, color ?? existing.color, collapsed ?? existing.collapsed, id);
+    const group = db.prepare('SELECT * FROM task_groups WHERE id = ?').get(id);
+    io.emit('group-updated', group);
+    res.json(group);
+  } catch (error) {
+    res.status(500).json({ error: 'Error updating group' });
+  }
+});
+
+app.delete('/api/groups/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    db.prepare('UPDATE tasks SET group_id = NULL WHERE group_id = ?').run(id);
+    db.prepare('DELETE FROM task_groups WHERE id = ?').run(id);
+    io.emit('group-deleted', parseInt(id));
+    res.json({ message: 'Group deleted' });
+  } catch (error) {
+    res.status(500).json({ error: 'Error deleting group' });
+  }
+});
 
 app.get('/api/tasks', (_req, res) => {
   try {
@@ -103,11 +183,11 @@ app.get('/api/tasks', (_req, res) => {
 
 app.post('/api/tasks', (req, res) => {
   try {
-    const { name, start_date, end_date, estimate, color, status, notes } = req.body;
+    const { name, start_date, end_date, estimate, color, status, notes, group_id } = req.body;
     const stmt = db.prepare(
-      'INSERT INTO tasks (name, start_date, end_date, estimate, color, status, notes) VALUES (?, ?, ?, ?, ?, ?, ?)'
+      'INSERT INTO tasks (name, start_date, end_date, estimate, color, status, notes, group_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
     );
-    const result = stmt.run(name, start_date, end_date, estimate || null, color || '#4caf50', status || 'pendiente', notes || '');
+    const result = stmt.run(name, start_date, end_date, estimate || null, color || '#4caf50', status || 'pendiente', notes || '', group_id || null);
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(result.lastInsertRowid) as any;
     const deps = db.prepare('SELECT depends_on_id FROM task_dependencies WHERE task_id = ?').all(result.lastInsertRowid) as { depends_on_id: number }[];
     const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id), attachments: [] };
@@ -123,11 +203,11 @@ app.post('/api/tasks', (req, res) => {
 app.put('/api/tasks/:id', (req, res) => {
   try {
     const { id } = req.params;
-    const { name, start_date, end_date, estimate, color, status, notes } = req.body;
+    const { name, start_date, end_date, estimate, color, status, notes, group_id } = req.body;
     const stmt = db.prepare(
-      'UPDATE tasks SET name = ?, start_date = ?, end_date = ?, estimate = ?, color = ?, status = ?, notes = ? WHERE id = ?'
+      'UPDATE tasks SET name = ?, start_date = ?, end_date = ?, estimate = ?, color = ?, status = ?, notes = ?, group_id = ? WHERE id = ?'
     );
-    stmt.run(name, start_date, end_date, estimate || null, color || '#4caf50', status || 'pendiente', notes || '', id);
+    stmt.run(name, start_date, end_date, estimate || null, color || '#4caf50', status || 'pendiente', notes || '', group_id || null, id);
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as any;
     const deps = db.prepare('SELECT depends_on_id FROM task_dependencies WHERE task_id = ?').all(id) as { depends_on_id: number }[];
     const attachments = db.prepare('SELECT * FROM task_attachments WHERE task_id = ?').all(id) as any[];
@@ -230,6 +310,35 @@ app.delete('/api/tasks/:id/dependencies/:depId', (req, res) => {
     res.json(taskWithDeps);
   } catch (error) {
     res.status(500).json({ error: 'Error removing dependency' });
+  }
+});
+
+app.post('/api/tasks/move', (req, res) => {
+  try {
+    const { task_id, group_id, position } = req.body;
+    db.prepare('UPDATE tasks SET group_id = ?, position = ? WHERE id = ?').run(group_id || null, position ?? 0, task_id);
+    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(task_id) as any;
+    const deps = db.prepare('SELECT depends_on_id FROM task_dependencies WHERE task_id = ?').all(task_id) as { depends_on_id: number }[];
+    const attachments = db.prepare('SELECT * FROM task_attachments WHERE task_id = ?').all(task_id) as any[];
+    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id), attachments };
+    io.emit('task-updated', taskWithDeps);
+    res.json(taskWithDeps);
+  } catch (error) {
+    res.status(500).json({ error: 'Error moving task' });
+  }
+});
+
+app.post('/api/tasks/reorder', (req, res) => {
+  try {
+    const { ordered_ids } = req.body;
+    const stmt = db.prepare('UPDATE tasks SET position = ? WHERE id = ?');
+    const tx = db.transaction((ids: number[]) => {
+      ids.forEach((id, idx) => stmt.run(idx, id));
+    });
+    tx(ordered_ids);
+    res.json({ message: 'Tasks reordered' });
+  } catch (error) {
+    res.status(500).json({ error: 'Error reordering tasks' });
   }
 });
 
