@@ -87,27 +87,7 @@ export default function App() {
   const [dragging, setDragging] = useState<DragState | null>(null);
   const [dragDelta, setDragDelta] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
-  const sidebarRef = useRef<HTMLDivElement>(null);
   const calendarContainerRef = useRef<HTMLDivElement>(null);
-  const isSyncingScroll = useRef(false);
-
-  const handleSidebarScroll = () => {
-    if (isSyncingScroll.current) return;
-    isSyncingScroll.current = true;
-    if (scrollRef.current && sidebarRef.current) {
-      scrollRef.current.scrollTop = sidebarRef.current.scrollTop;
-    }
-    requestAnimationFrame(() => { isSyncingScroll.current = false; });
-  };
-
-  const handleCalendarScroll = () => {
-    if (isSyncingScroll.current) return;
-    isSyncingScroll.current = true;
-    if (sidebarRef.current && scrollRef.current) {
-      sidebarRef.current.scrollTop = scrollRef.current.scrollTop;
-    }
-    requestAnimationFrame(() => { isSyncingScroll.current = false; });
-  };
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [detailModal, setDetailModal] = useState<DetailModalState | null>(null);
   const [linkMode, setLinkMode] = useState<{ fromTaskId: number } | null>(null);
@@ -594,14 +574,26 @@ export default function App() {
     return getDependencyErrorMessageForTask(task) !== null;
   };
 
-  const getTaskTopPx = (taskId: number): number => {
-    let topPx = 0;
-    for (const row of sidebarRows) {
-      if (row.type === 'task' && row.task?.id === taskId) return topPx;
-      topPx += row.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT;
+  const GROUP_HEADER_HEIGHT = ROW_HEIGHT;
+
+  interface SidebarRow {
+    type: 'group-header' | 'ungrouped-header' | 'task';
+    groupId?: number | null;
+    groupColor?: string;
+    task?: Task;
+  }
+
+  const sidebarRows: SidebarRow[] = [];
+  for (const group of groups) {
+    const groupTasks = tasks.filter(t => t.group_id === group.id);
+    sidebarRows.push({ type: 'group-header', groupId: group.id, groupColor: group.color });
+    if (!group.collapsed) {
+      groupTasks.forEach(task => sidebarRows.push({ type: 'task', task, groupId: group.id, groupColor: group.color }));
     }
-    return 0;
-  };
+  }
+  sidebarRows.push({ type: 'ungrouped-header', groupId: null });
+  const ungroupedTasks = tasks.filter(t => !t.group_id);
+  ungroupedTasks.forEach(task => sidebarRows.push({ type: 'task', task }));
 
   const getTaskRects = () => {
     return tasks.map((task) => {
@@ -628,139 +620,75 @@ export default function App() {
         }
       }
 
-      const top = getTaskTopPx(task.id) + 8;
-      const height = ROW_HEIGHT - 16;
-
       const isInvalid = hasInvalidDependencies({
         ...task,
         start_date: dragging && dragging.taskId === task.id ? currentStartDate : task.start_date,
       });
 
-      return { task, left: currentLeft, width: currentWidth, top, height, isInvalid };
+      return { task, left: currentLeft, width: currentWidth, isInvalid };
     });
   };
 
-  const getTaskGroupTopPx = (task: Task): { top: number; left: number; width: number; height: number } | null => {
+  const getTaskGroupRect = (task: Task): { left: number; width: number } | null => {
     for (const group of groups) {
       if (group.collapsed && task.group_id === group.id) {
-        const groupRowIdx = sidebarRows.findIndex(r => r.type === 'group-header' && r.groupId === group.id);
-        if (groupRowIdx === -1) continue;
-        const topPx = sidebarRows.slice(0, groupRowIdx).reduce((t, r) => t + (r.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT), 0);
         const sIdx = getDayIndex(task.start_date, viewStart);
         const eIdx = getDayIndex(task.end_date, viewStart);
         const dur = eIdx - sIdx;
         const ctLeft = sIdx * dayWidth;
         const ctWidth = Math.max(dur * dayWidth, dayWidth);
-        return { top: topPx + GROUP_HEADER_HEIGHT - 12, left: ctLeft + 2, width: ctWidth - 4, height: 8 };
+        return { left: ctLeft + 2, width: ctWidth - 4 };
       }
     }
     return null;
   };
 
-  const renderArrows = () => {
+  const renderRowArrows = (rowTask: Task, rowRect: { left: number; width: number }) => {
+    if (!rowTask.dependencies || rowTask.dependencies.length === 0) return null;
     const rects = getTaskRects();
     const arrows: React.ReactNode[] = [];
 
-    tasks.forEach((task) => {
-      if (!task.dependencies) return;
-      let taskRect = rects.find(r => r.task.id === task.id);
-      let taskCollapsed = false;
-      if (!taskRect) {
-        const collapsedRect = getTaskGroupTopPx(task);
-        if (collapsedRect) {
-          taskRect = { task, left: collapsedRect.left, width: collapsedRect.width, top: collapsedRect.top, height: collapsedRect.height, isInvalid: false };
-          taskCollapsed = true;
-        }
-      }
-      if (!taskRect) return;
-
-      task.dependencies.forEach(depId => {
-        let depRect = rects.find(r => r.task.id === depId);
-        let depCollapsed = false;
-        if (!depRect) {
-          const depTask = tasks.find(t => t.id === depId);
-          if (!depTask) return;
-          const collapsedRect = getTaskGroupTopPx(depTask);
-          if (collapsedRect) {
-            depRect = { task: depTask, left: collapsedRect.left, width: collapsedRect.width, top: collapsedRect.top, height: collapsedRect.height, isInvalid: false };
-            depCollapsed = true;
-          }
-        }
-        if (!depRect) return;
-
-        if (taskCollapsed && depCollapsed) return;
-
+    rowTask.dependencies.forEach(depId => {
+      let depRect = rects.find(r => r.task.id === depId);
+      let depCollapsed = false;
+      if (!depRect) {
         const depTask = tasks.find(t => t.id === depId);
         if (!depTask) return;
-        const isSameDay = task.start_date === depTask.end_date;
-
-        if (isSameDay) {
-          const fromX = depRect.left + depRect.width;
-          const fromY = depRect.top + depRect.height / 2;
-          const toX = taskRect.left;
-          const toY = taskRect.top + taskRect.height / 2;
-          arrows.push(
-            <line
-              key={`${task.id}-${depId}`}
-              x1={fromX}
-              y1={fromY}
-              x2={toX}
-              y2={toY}
-              stroke={darkenColor(task.color || '#4caf50', 0.6)}
-              strokeWidth={2}
-              strokeDasharray="4,2"
-              markerEnd={`url(#arrowhead-${task.id})`}
-            />
-          );
-        } else {
-          const fromX = depRect.left + depRect.width;
-          const fromY = depRect.top + depRect.height / 2;
-          const toX = taskRect.left;
-          const toY = taskRect.top + taskRect.height / 2;
-          const midX = fromX + (toX - fromX) / 2;
-
-          arrows.push(
-            <path
-              key={`${task.id}-${depId}`}
-              d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`}
-              stroke={darkenColor(task.color || '#4caf50', 0.6)}
-              strokeWidth={2}
-              fill="none"
-              markerEnd={`url(#arrowhead-${task.id})`}
-            />
-          );
+        const collapsedRect = getTaskGroupRect(depTask);
+        if (collapsedRect) {
+          depRect = { task: depTask, left: collapsedRect.left, width: collapsedRect.width, isInvalid: false };
+          depCollapsed = true;
         }
-      });
+      }
+      if (!depRect) return;
+
+      const depTask = tasks.find(t => t.id === depId);
+      if (!depTask) return;
+
+      const fromX = depRect.left + depRect.width;
+      const fromY = ROW_HEIGHT / 2;
+      const toX = rowRect.left;
+      const toY = ROW_HEIGHT / 2;
+      const midX = fromX + (toX - fromX) / 2;
+
+      arrows.push(
+        <path
+          key={`arrow-${rowTask.id}-${depId}`}
+          d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`}
+          stroke={darkenColor(rowTask.color || '#4caf50', 0.6)}
+          strokeWidth={2}
+          fill="none"
+        />
+      );
     });
 
-    const markerTasks = tasks.filter(t => t.dependencies && t.dependencies.length > 0);
-
+    if (arrows.length === 0) return null;
     return (
-      <svg
-        style={{
-          position: 'absolute',
-          top: 0,
-          left: 0,
-          width: '100%',
-          height: '100%',
-          pointerEvents: 'none',
-          zIndex: 5,
-        }}
-      >
+      <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 5 }}>
         <defs>
-          {markerTasks.map(task => (
-            <marker
-              key={`marker-${task.id}`}
-              id={`arrowhead-${task.id}`}
-              markerWidth="8"
-              markerHeight="6"
-              refX="8"
-              refY="3"
-              orient="auto"
-            >
-              <polygon points="0 0, 8 3, 0 6" fill={darkenColor(task.color || '#4caf50', 0.6)} />
-            </marker>
-          ))}
+          <marker id={`arrowhead-${rowTask.id}`} markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+            <polygon points="0 0, 8 3, 0 6" fill={darkenColor(rowTask.color || '#4caf50', 0.6)} />
+          </marker>
         </defs>
         {arrows}
       </svg>
@@ -891,34 +819,6 @@ export default function App() {
     return 'other';
   };
 
-  const GROUP_HEADER_HEIGHT = 48;
-
-  interface SidebarRow {
-    type: 'group-header' | 'ungrouped-header' | 'task';
-    groupId?: number | null;
-    groupColor?: string;
-    task?: Task;
-  }
-
-  const sidebarRows: SidebarRow[] = [];
-  for (const group of groups) {
-    const groupTasks = tasks.filter(t => t.group_id === group.id);
-    sidebarRows.push({ type: 'group-header', groupId: group.id, groupColor: group.color });
-    if (!group.collapsed) {
-      groupTasks.forEach(task => sidebarRows.push({ type: 'task', task, groupId: group.id, groupColor: group.color }));
-    }
-  }
-  sidebarRows.push({ type: 'ungrouped-header', groupId: null });
-  const ungroupedTasks = tasks.filter(t => !t.group_id);
-  ungroupedTasks.forEach(task => sidebarRows.push({ type: 'task', task }));
-
-  const visibleTasks: Task[] = [];
-  for (const row of sidebarRows) {
-    if (row.type === 'task' && row.task) {
-      visibleTasks.push(row.task);
-    }
-  }
-
   const tBg = isDark ? '#1a1a1a' : '#f5f5f5';
   const cardBg = isDark ? '#2a2a2a' : '#ffffff';
   const borderColor = isDark ? '#3a3a3a' : '#e0e0e0';
@@ -926,6 +826,11 @@ export default function App() {
   const textPrimary = isDark ? '#e0e0e0' : '#333333';
   const textSecondary = isDark ? '#888888' : '#666666';
   const textMuted = isDark ? '#666666' : '#999999';
+
+  const sidebarDragHighlight = (groupId: number | null) =>
+    sidebarDragOverGroupId === groupId && sidebarDragTaskId !== null;
+
+  const SIDEBAR_W = 192;
 
   return (
     <div className="h-screen flex flex-col" style={{ backgroundColor: tBg, color: textPrimary, transition: 'background-color 0.3s ease, color 0.3s ease' }}>
@@ -980,12 +885,7 @@ export default function App() {
           {linkMode && (
             <span className="text-[10px] text-orange-600 bg-orange-100 px-2 py-1 rounded">
               Click en tarea destino
-              <button
-                onClick={() => setLinkMode(null)}
-                className="ml-2 text-orange-800 font-bold"
-              >
-                ✕
-              </button>
+              <button onClick={() => setLinkMode(null)} className="ml-2 text-orange-800 font-bold">✕</button>
             </span>
           )}
           <button
@@ -1000,197 +900,50 @@ export default function App() {
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        <div ref={sidebarRef} className="w-48 border-r flex-shrink-0 overflow-y-auto" style={{ borderColor, backgroundColor: cardBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }} onScroll={handleSidebarScroll}>
-
-          <div
-            className="sticky top-0 z-10"
-            ref={addDropdownRef}
-            style={{ backgroundColor: cardBg }}
-          >
-            <button
-              onClick={() => setShowAddDropdown(!showAddDropdown)}
-              className="w-full flex items-center justify-center gap-1 px-2 py-2 text-xs font-medium border-b hover:opacity-80 transition-colors"
-              style={{ borderColor, color: '#4caf50' }}
-            >
-              Agregar <TbChevronDown size={12} />
-            </button>
-            {showAddDropdown && (
-              <div className="absolute left-0 right-0 z-50 border-b" style={{ backgroundColor: cardBg, borderColor }}>
-                <button
-                  className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
-                  style={{ color: textPrimary }}
-                  onClick={() => {
-                    addTask();
-                    setShowAddDropdown(false);
-                  }}
-                >
-                  <TbFileText size={14} /> Agregar tarea
-                </button>
-                <button
-                  className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
-                  style={{ color: textPrimary }}
-                  onClick={() => {
-                    addGroup();
-                    setShowAddDropdown(false);
-                  }}
-                >
-                  <TbFolder size={14} /> Agregar grupo
-                </button>
-              </div>
-            )}
-          </div>
-
-          {(() => {
-            const sidebarDragHighlight = (groupId: number | null) =>
-              sidebarDragOverGroupId === groupId && sidebarDragTaskId !== null;
-
-            return (
-              <>
-                {groups.map(group => {
-                  const groupTasks = tasks.filter(t => t.group_id === group.id);
-                  return (
-                    <div key={`group-sidebar-${group.id}`}>
-                      <div
-                        className="flex items-center border-b px-2"
-                        style={{
-                          height: GROUP_HEADER_HEIGHT,
-                          borderColor,
-                          backgroundColor: sidebarDragHighlight(group.id)
-                            ? hexToRgba(group.color, 0.25)
-                            : subtleBg,
-                          borderLeft: `3px solid ${group.color}`,
-                        }}
-                        onDragOver={(e) => handleGroupDragOver(e, group.id)}
-                        onDrop={(e) => handleGroupDrop(e, group.id)}
-                        onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
-                      >
-                        <button
-                          onClick={() => toggleGroupCollapse(group.id)}
-                          className="mr-0.5 flex-shrink-0"
-                          style={{ color: textMuted }}
-                        >
-                          {group.collapsed ? <TbChevronRight size={9} /> : <TbChevronDown size={9} />}
-                        </button>
-                        <span className="flex-1 text-[9px] font-semibold truncate" style={{ color: textPrimary }}>
-                          {group.name}
-                        </span>
-                        {group.collapsed ? (
-                          <span className="text-[8px] px-1" style={{ color: textMuted }}>
-                            {groupTasks.length}
-                          </span>
-                        ) : null}
-                        <button
-                          onClick={() => deleteGroup(group.id)}
-                          className="text-gray-300 hover:text-red-500 text-[9px] font-bold"
-                        >
-                          ×
-                        </button>
-                      </div>
-                      {!group.collapsed && groupTasks.map((task: Task) => (
-                        <div
-                          key={task.id}
-                          className="flex items-center border-b"
-                          style={{
-                            height: ROW_HEIGHT,
-                            borderColor,
-                            backgroundColor: hexToRgba(group.color, 0.08),
-                            borderLeft: `3px solid ${group.color}`,
-                            transition: 'background-color 0.15s ease, opacity 0.15s ease',
-                          }}
-                          draggable
-                          onDragStart={(e) => handleSidebarDragStart(e, task.id)}
-                          onDragEnd={handleSidebarDragEnd}
-                        >
-                          <div
-                            className="w-2 h-2 rounded-full mx-2 flex-shrink-0"
-                            style={{ backgroundColor: task.color || '#4caf50' }}
-                          />
-                          <span className="flex-1 text-xs font-medium truncate px-1" style={{ color: textPrimary }}>
-                            {task.name}
-                          </span>
-                          <span className="text-[10px] px-1 mr-1 flex-shrink-0" style={{ color: textMuted }}>
-                            {task.estimate ? `${task.estimate}` : ''}
-                          </span>
-                          <button
-                            onClick={() => deleteTask(task.id)}
-                            className="mr-2 text-gray-300 hover:text-red-500 text-xs font-bold flex-shrink-0"
-                          >
-                            ×
-                          </button>
-                        </div>
-                      ))}
-                    </div>
-                  );
-                })}
-                <div
-                  className="border-b px-2 flex items-center"
-                  style={{
-                    height: GROUP_HEADER_HEIGHT,
-                    borderColor,
-                    color: sidebarDragHighlight(null) ? '#4caf50' : textMuted,
-                    backgroundColor: sidebarDragHighlight(null)
-                      ? 'rgba(76,175,80,0.1)' : undefined,
-                  }}
-                  onDragOver={(e) => handleGroupDragOver(e, null)}
-                  onDrop={(e) => handleGroupDrop(e, null)}
-                  onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
-                >
-                  <span className="text-[9px] font-semibold">Sin grupo</span>
-                </div>
-                {ungroupedTasks.map(task => (
-                  <div
-                    key={task.id}
-                    className="flex items-center border-b"
-                    style={{
-                      height: ROW_HEIGHT,
-                      borderColor,
-                      transition: 'background-color 0.15s ease, opacity 0.15s ease',
-                    }}
-                    draggable
-                    onDragStart={(e) => handleSidebarDragStart(e, task.id)}
-                    onDragEnd={handleSidebarDragEnd}
-                  >
-                    <div
-                      className="w-2 h-2 rounded-full mx-2 flex-shrink-0"
-                      style={{ backgroundColor: task.color || '#4caf50' }}
-                    />
-                    <span className="flex-1 text-xs font-medium truncate px-1" style={{ color: textPrimary }}>
-                      {task.name}
-                    </span>
-                    <span className="text-[10px] px-1 mr-1 flex-shrink-0" style={{ color: textMuted }}>
-                      {task.estimate ? `${task.estimate}` : ''}
-                    </span>
-                    <button
-                      onClick={() => deleteTask(task.id)}
-                      className="mr-2 text-gray-300 hover:text-red-500 text-xs font-bold flex-shrink-0"
-                    >
-                      ×
-                    </button>
-                  </div>
-                ))}
-              </>
-            );
-          })()}
-        </div>
-
         <div
-          className="flex-1 overflow-x-auto overflow-y-auto"
           ref={scrollRef}
-          onScroll={handleCalendarScroll}
+          className="flex-1 overflow-x-auto overflow-y-auto"
         >
           <div
-            className="relative"
             ref={calendarContainerRef}
+            className="relative"
             style={{ minWidth: numDays * dayWidth }}
           >
             <div className="h-px" style={{ backgroundColor: borderColor }} />
-          <div className="flex border-b sticky top-0 z-10" style={{ borderColor, backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
+
+            <div
+              className="flex sticky top-0 z-20"
+              style={{ height: 31, backgroundColor: cardBg, borderBottom: `1px solid ${borderColor}` }}
+            >
+              <div
+                ref={addDropdownRef}
+                className="relative flex-shrink-0 flex items-center justify-center border-r text-[11px] font-medium hover:opacity-80 transition-colors cursor-pointer"
+                style={{
+                  width: SIDEBAR_W,
+                  borderColor,
+                  color: '#4caf50',
+                }}
+                onClick={() => setShowAddDropdown(!showAddDropdown)}
+              >
+                Agregar ▾
+                {showAddDropdown && (
+                  <div className="absolute left-0 top-full z-50 border border-t-0" style={{ backgroundColor: cardBg, borderColor }}>
+                    <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={() => { addTask(); setShowAddDropdown(false); }}>
+                      <TbFileText size={14} /> Agregar tarea
+                    </button>
+                    <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={() => { addGroup(); setShowAddDropdown(false); }}>
+                      <TbFolder size={14} /> Agregar grupo
+                    </button>
+                  </div>
+                )}
+              </div>
+              <div className="flex-1" />
+            </div>
+
+            <div className="flex border-b sticky top-0 z-10" style={{ borderColor, backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
               {weeks.map((week, wi) => (
                 <div key={wi} className="flex" style={{ width: week.days.length * dayWidth }}>
-                  <div
-                    className="text-[10px] font-medium px-1 py-1"
-                    style={{ width: week.days.length * dayWidth, color: textMuted }}
-                  >
+                  <div className="text-[10px] font-medium px-1 py-1" style={{ width: week.days.length * dayWidth, color: textMuted }}>
                     {format(week.weekStart, 'MMM yyyy', { locale: es })}
                   </div>
                 </div>
@@ -1198,6 +951,7 @@ export default function App() {
             </div>
 
             <div className="flex border-b sticky top-0 z-10" style={{ borderColor, backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
+              <div className="flex-shrink-0 border-r" style={{ width: SIDEBAR_W, borderColor, backgroundColor: subtleBg }} />
               {calendarDays.map((day, i) => {
                 const dayOfWeek = day.getDay();
                 const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
@@ -1219,37 +973,39 @@ export default function App() {
               })}
             </div>
 
-            <div className="relative" style={{
-              height: sidebarRows.reduce((total, row) => {
-                if (row.type === 'task') return total + ROW_HEIGHT;
-                return total + GROUP_HEADER_HEIGHT;
-              }, 0)
-            }}>
-              {sidebarRows.map((row, rowIdx) => {
-                if (row.type === 'group-header') {
-                  const group = groups.find(g => g.id === row.groupId);
-                  if (!group) return null;
-                  const topPx = sidebarRows.slice(0, rowIdx).reduce((t, r) => t + (r.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT), 0);
-                  const collapsedGroupTasks = group.collapsed ? tasks.filter(t => t.group_id === group.id) : [];
-                  return (
+            {sidebarRows.map((row, rowIdx) => {
+              if (row.type === 'group-header') {
+                const group = groups.find(g => g.id === row.groupId);
+                if (!group) return null;
+                const collapsedGroupTasks = group.collapsed ? tasks.filter(t => t.group_id === group.id) : [];
+
+                return (
+                  <div
+                    key={`group-row-${group.id}`}
+                    className="flex border-b"
+                    style={{
+                      height: GROUP_HEADER_HEIGHT,
+                      borderBottom: `1px solid ${borderColor}`,
+                      backgroundColor: sidebarDragHighlight(group.id) ? hexToRgba(group.color, 0.25) : subtleBg,
+                    }}
+                    onDragOver={(e) => handleGroupDragOver(e, group.id)}
+                    onDrop={(e) => handleGroupDrop(e, group.id)}
+                    onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
+                  >
                     <div
-                      key={`cal-group-row-${group.id}`}
-                      className="absolute left-0 w-full border-b"
-                      style={{
-                        top: topPx,
-                        height: GROUP_HEADER_HEIGHT,
-                        backgroundColor: hexToRgba(group.color, 0.08),
-                        borderBottom: `2px solid ${hexToRgba(group.color, 0.4)}`,
-                        borderLeft: `3px solid ${group.color}`,
-                        zIndex: 1,
-                      }}
+                      className="flex-shrink-0 border-r flex items-center px-2 gap-1"
+                      style={{ width: SIDEBAR_W, borderColor, borderLeft: `3px solid ${group.color}` }}
                     >
-                      <span
-                        className="text-[8px] font-bold px-1 rounded absolute z-10"
-                        style={{ color: group.color, top: 2, left: 6 }}
-                      >
+                      <button onClick={() => toggleGroupCollapse(group.id)} style={{ color: textMuted }}>
+                        {group.collapsed ? <TbChevronRight size={9} /> : <TbChevronDown size={9} />}
+                      </button>
+                      <span className="flex-1 text-[9px] font-semibold truncate" style={{ color: textPrimary }}>
                         {group.name}
                       </span>
+                      {group.collapsed && <span className="text-[8px]" style={{ color: textMuted }}>{collapsedGroupTasks.length}</span>}
+                      <button onClick={() => deleteGroup(group.id)} className="text-gray-300 hover:text-red-500 text-[9px] font-bold">×</button>
+                    </div>
+                    <div className="flex-1 relative" ref={calendarContainerRef}>
                       {group.collapsed && collapsedGroupTasks.map(ct => {
                         const sIdx = getDayIndex(ct.start_date, viewStart);
                         const eIdx = getDayIndex(ct.end_date, viewStart);
@@ -1260,77 +1016,85 @@ export default function App() {
                           <div
                             key={`collapsed-bar-${ct.id}`}
                             className="absolute rounded-[2px]"
-                            style={{
-                              left: ctLeft + 2,
-                              width: ctWidth - 4,
-                              top: GROUP_HEADER_HEIGHT - 12,
-                              height: 8,
-                              backgroundColor: ct.color || '#4caf50',
-                              opacity: 0.7,
-                            }}
+                            style={{ left: ctLeft + 2, width: ctWidth - 4, top: GROUP_HEADER_HEIGHT - 12, height: 8, backgroundColor: ct.color || '#4caf50', opacity: 0.7 }}
                           />
                         );
                       })}
                     </div>
-                  );
-                }
+                  </div>
+                );
+              }
 
-                if (row.type === 'ungrouped-header') {
-                  const topPx = sidebarRows.slice(0, rowIdx).reduce((t, r) => t + (r.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT), 0);
-                  return (
-                    <div
-                      key="cal-ungrouped-header"
-                      className="absolute left-0 w-full border-b"
-                      style={{
-                        top: topPx,
-                        height: GROUP_HEADER_HEIGHT,
-                        borderBottom: `1px solid ${borderColor}`,
-                      }}
-                    >
-                      <span className="text-[8px] font-medium px-1" style={{ color: textMuted }}>
-                        Sin grupo
-                      </span>
-                    </div>
-                  );
-                }
-
-                const task = row.task!;
-                const topPx = sidebarRows.slice(0, rowIdx).reduce((t, r) => t + (r.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT), 0);
-                const startIdx = getDayIndex(task.start_date, viewStart);
-                const endIdx = getDayIndex(task.end_date, viewStart);
-                const duration = endIdx - startIdx;
-                let left = startIdx * dayWidth;
-                let width = Math.max(duration * dayWidth, dayWidth);
-
-                let currentLeft = left;
-                let currentWidth = width;
-                if (dragging && dragging.taskId === task.id) {
-                  const daysDelta = Math.round(dragDelta / dayWidth);
-                  if (dragging.type === 'move') {
-                    currentLeft = left + daysDelta * dayWidth;
-                  } else if (dragging.type === 'resize-left') {
-                    currentLeft = left + daysDelta * dayWidth;
-                    currentWidth = width - daysDelta * dayWidth;
-                  } else if (dragging.type === 'resize-right') {
-                    currentWidth = width + daysDelta * dayWidth;
-                  }
-                }
-
-                const bgColor = task.color || '#4caf50';
-                const taskBorderColor = darkenColor(bgColor, 0.7);
-                const isLinkTarget = linkMode && linkMode.fromTaskId !== task.id;
-                const isInvalid = hasInvalidDependencies(task);
-                const errorMsg = isInvalid ? getDependencyErrorMessageForTask(task) : null;
-                const isHovered = hoveredTask === task.id;
-
+              if (row.type === 'ungrouped-header') {
                 return (
+                  <div key="ungrouped" className="flex border-b" style={{ height: GROUP_HEADER_HEIGHT, borderBottom: `1px solid ${borderColor}` }}>
+                    <div
+                      className="flex-shrink-0 border-r flex items-center px-2"
+                      style={{ width: SIDEBAR_W, borderColor }}
+                      onDragOver={(e) => handleGroupDragOver(e, null)}
+                      onDrop={(e) => handleGroupDrop(e, null)}
+                      onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
+                    >
+                      <span className="text-[9px] font-semibold" style={{ color: sidebarDragHighlight(null) ? '#4caf50' : textMuted }}>Sin grupo</span>
+                    </div>
+                    <div className="flex-1" />
+                  </div>
+                );
+              }
+
+              const task = row.task!;
+              const startIdx = getDayIndex(task.start_date, viewStart);
+              const endIdx = getDayIndex(task.end_date, viewStart);
+              const duration = endIdx - startIdx;
+              let taskLeft = startIdx * dayWidth;
+              let taskWidth = Math.max(duration * dayWidth, dayWidth);
+
+              if (dragging && dragging.taskId === task.id) {
+                const daysDelta = Math.round(dragDelta / dayWidth);
+                if (dragging.type === 'move') {
+                  taskLeft = startIdx * dayWidth + daysDelta * dayWidth;
+                } else if (dragging.type === 'resize-left') {
+                  taskLeft = startIdx * dayWidth + daysDelta * dayWidth;
+                  taskWidth = Math.max(taskWidth - daysDelta * dayWidth, dayWidth);
+                } else if (dragging.type === 'resize-right') {
+                  taskWidth = Math.max(taskWidth + daysDelta * dayWidth, dayWidth);
+                }
+              }
+
+              const bgColor = task.color || '#4caf50';
+              const isLinkTarget = linkMode && linkMode.fromTaskId !== task.id;
+              const isInvalid = hasInvalidDependencies(task);
+              const errorMsg = isInvalid ? getDependencyErrorMessageForTask(task) : null;
+              const isHovered = hoveredTask === task.id;
+              const group = row.groupId ? groups.find(g => g.id === row.groupId) : null;
+              const groupColor = group?.color || '#888';
+              const groupBg = hexToRgba(groupColor, 0.08);
+
+              return (
+                <div key={task.id} className="flex border-b" style={{ height: ROW_HEIGHT, borderBottom: `1px solid ${borderColor}` }}>
                   <div
-                    key={task.id}
-                    className="absolute left-0 w-full"
-                    style={{ top: topPx, height: ROW_HEIGHT }}
+                    className="flex-shrink-0 border-r flex items-center px-2 gap-1 cursor-pointer"
+                    style={{
+                      width: SIDEBAR_W,
+                      borderColor,
+                      backgroundColor: sidebarDragHighlight(row.groupId ?? null) ? hexToRgba(groupColor, 0.25) : groupBg,
+                      borderLeft: `3px solid ${groupColor}`,
+                      transition: 'background-color 0.15s ease, opacity 0.15s ease',
+                    }}
+                    draggable
+                    onDragStart={(e) => handleSidebarDragStart(e, task.id)}
+                    onDragEnd={handleSidebarDragEnd}
                     onContextMenu={(e) => handleContextMenu(e, task.id)}
                   >
-                    <div className="border-t mx-2" style={{ borderColor }} />
+                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: bgColor }} />
+                    <span className="flex-1 text-[11px] font-medium truncate" style={{ color: textPrimary }}>
+                      {task.name}
+                    </span>
+                    <span className="text-[9px] flex-shrink-0" style={{ color: textMuted }}>{task.estimate || ''}</span>
+                    <button onClick={() => deleteTask(task.id)} className="text-gray-300 hover:text-red-500 text-[9px] font-bold flex-shrink-0">×</button>
+                  </div>
+
+                  <div className="flex-1 relative" ref={calendarContainerRef}>
                     {calendarDays.map((day, i) => {
                       const dayOfWeek = day.getDay();
                       const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
@@ -1347,24 +1111,19 @@ export default function App() {
                         />
                       );
                     })}
-
                     <div
                       className="absolute rounded-[3px] select-none"
                       style={{
-                        left: currentLeft + 2,
-                        width: currentWidth - 4,
+                        left: taskLeft + 2,
+                        width: taskWidth - 4,
                         top: 8,
                         height: ROW_HEIGHT - 16,
                         backgroundColor: bgColor,
-                        border: isLinkTarget
-                          ? `2px dashed #ff9800`
-                          : isInvalid
-                          ? `2px solid #f44336`
-                          : `1px solid ${taskBorderColor}`,
+                        border: isLinkTarget ? '2px dashed #ff9800' : isInvalid ? '2px solid #f44336' : `1px solid ${darkenColor(bgColor, 0.7)}`,
                         cursor: dragging && dragging.taskId === task.id ? 'grabbing' : linkMode ? 'pointer' : 'grab',
                         zIndex: dragging && dragging.taskId === task.id ? 10 : 2,
                         opacity: linkMode && !isLinkTarget ? 0.6 : 1,
-                        boxShadow: isInvalid ? `0 0 8px rgba(244, 67, 54, 0.6)` : isHovered ? `0 2px 8px rgba(0,0,0,0.3)` : 'none',
+                        boxShadow: isInvalid ? '0 0 8px rgba(244, 67, 54, 0.6)' : isHovered ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
                         transform: isHovered && !(dragging && dragging.taskId === task.id) ? 'scaleY(1.08)' : 'scaleY(1)',
                         transition: 'transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease',
                       }}
@@ -1384,111 +1143,53 @@ export default function App() {
                       onMouseLeave={() => setHoveredTask(null)}
                     >
                       <div className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none">
-                        <span
-                          className="text-[10px] font-bold text-white truncate px-1"
-                          style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}
-                        >
+                        <span className="text-[10px] font-bold text-white truncate px-1" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}>
                           {task.name}
                         </span>
                       </div>
-                      {isInvalid && errorMsg && isHovered && (
-                        <div
-                          className="absolute z-20 px-2 py-1 rounded text-[10px] font-medium text-white whitespace-nowrap pointer-events-none"
-                          style={{
-                            bottom: '100%',
-                            left: '50%',
-                            transform: 'translateX(-50%)',
-                            marginBottom: 4,
-                            backgroundColor: '#f44336',
-                          }}
-                        >
-                          <TbAlertTriangle size={10} className="inline mr-1" />
-                          {errorMsg}
+                      {isInvalid && isHovered && (
+                        <div className="absolute z-20 px-2 py-1 rounded text-[10px] font-medium text-white whitespace-nowrap pointer-events-none"
+                          style={{ bottom: '100%', left: '50%', transform: 'translateX(-50%)', marginBottom: 4, backgroundColor: '#f44336' }}>
+                          <TbAlertTriangle size={10} className="inline mr-1" />{errorMsg}
                         </div>
                       )}
                       {isInvalid && !isHovered && (
-                        <div
-                          className="absolute flex items-center justify-center"
-                          style={{
-                            top: -4,
-                            right: -4,
-                            width: 14,
-                            height: 14,
-                            borderRadius: '50%',
-                            backgroundColor: '#f44336',
-                            zIndex: 11,
-                          }}
-                        >
+                        <div className="absolute flex items-center justify-center" style={{ top: -4, right: -4, width: 14, height: 14, borderRadius: '50%', backgroundColor: '#f44336', zIndex: 11 }}>
                           <TbAlertTriangle size={9} className="text-white" />
                         </div>
                       )}
-                      <div
-                        className="absolute left-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-l-[3px]"
-                        onMouseDown={(e) => {
-                          if (linkMode) return;
-                          handleMouseDown(e, task.id, 'resize-left', task.start_date, task.end_date);
-                        }}
-                      />
-                      <div
-                        className="absolute right-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-r-[3px]"
-                        onMouseDown={(e) => {
-                          if (linkMode) return;
-                          handleMouseDown(e, task.id, 'resize-right', task.start_date, task.end_date);
-                        }}
-                      />
+                      <div className="absolute left-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-l-[3px]"
+                        onMouseDown={(e) => { if (!linkMode) handleMouseDown(e, task.id, 'resize-left', task.start_date, task.end_date); }} />
+                      <div className="absolute right-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-r-[3px]"
+                        onMouseDown={(e) => { if (!linkMode) handleMouseDown(e, task.id, 'resize-right', task.start_date, task.end_date); }} />
                     </div>
+                    {renderRowArrows(task, { left: taskLeft, width: taskWidth })}
                   </div>
-                );
-              })}
+                </div>
+              );
+            })}
 
-              {renderArrows()}
-
-              {(() => {
-                const todayIndex = differenceInDays(new Date(), viewStart);
-                if (todayIndex < 0 || todayIndex >= numDays) return null;
-                return (
-                  <div
-                    className="absolute top-0 bottom-0 pointer-events-none"
-                    style={{
-                      left: todayIndex * dayWidth + dayWidth / 2,
-                      width: 2,
-                      backgroundColor: '#f44336',
-                      zIndex: 4,
-                    }}
-                  >
-                    <div
-                      className="absolute -top-0 left-1/2 -translate-x-1/2 text-[9px] font-bold text-white px-1 py-0.5 rounded whitespace-nowrap"
-                      style={{ backgroundColor: '#f44336' }}
-                    >
-                      Hoy
-                    </div>
+            {(() => {
+              const todayIndex = differenceInDays(new Date(), viewStart);
+              if (todayIndex < 0 || todayIndex >= numDays) return null;
+              return (
+                <div className="absolute top-0 bottom-0 pointer-events-none" style={{ left: SIDEBAR_W + todayIndex * dayWidth + dayWidth / 2, width: 2, backgroundColor: '#f44336', zIndex: 4 }}>
+                  <div className="absolute -top-0 left-1/2 -translate-x-1/2 text-[9px] font-bold text-white px-1 py-0.5 rounded whitespace-nowrap" style={{ backgroundColor: '#f44336' }}>
+                    Hoy
                   </div>
-                );
-              })()}
-            </div>
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>
 
       {contextMenu && (
-        <div
-          ref={contextMenuRef}
-          className="fixed z-50 border rounded-lg shadow-xl py-1 min-w-[200px] anim-context-menu"
-          style={{ left: contextMenu.x, top: contextMenu.y, backgroundColor: cardBg, borderColor }}
-        >
-          <button
-            className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
-            style={{ color: textPrimary }}
-            onClick={() => {
-              setDetailModal({ taskId: contextMenu.taskId });
-              setContextMenu(null);
-            }}
-          >
+        <div ref={contextMenuRef} className="fixed z-50 border rounded-lg shadow-xl py-1 min-w-[200px] anim-context-menu" style={{ left: contextMenu.x, top: contextMenu.y, backgroundColor: cardBg, borderColor }}>
+          <button className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={() => { setDetailModal({ taskId: contextMenu.taskId }); setContextMenu(null); }}>
             <TbFileText size={14} /> Detalles
           </button>
-
           <div className="border-t my-1" style={{ borderColor }} />
-
           {colorPickerFor === contextMenu.taskId ? (
             <div className="px-4 py-2">
               <div className="text-[10px] mb-2" style={{ color: textMuted }}>Color de la tarea</div>
@@ -1496,79 +1197,37 @@ export default function App() {
                 {PRESET_COLORS.map(color => {
                   const task = tasks.find(t => t.id === contextMenu.taskId);
                   return (
-                    <button
-                      key={color}
-                      className="w-6 h-6 rounded-full border-2 hover:scale-110 transition-transform"
-                      style={{
-                        backgroundColor: color,
-                        borderColor: task?.color === color ? '#333' : 'transparent',
-                      }}
-                      onClick={() => {
-                        updateTask(contextMenu.taskId, { color });
-                        setContextMenu(null);
-                        setColorPickerFor(null);
-                      }}
-                    />
+                    <button key={color} className="w-6 h-6 rounded-full border-2 hover:scale-110 transition-transform" style={{ backgroundColor: color, borderColor: task?.color === color ? '#333' : 'transparent' }} onClick={() => { updateTask(contextMenu.taskId, { color }); setContextMenu(null); setColorPickerFor(null); }} />
                   );
                 })}
               </div>
             </div>
           ) : (
-            <button
-              className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
-              style={{ color: textPrimary }}
-              onClick={() => {
-                setColorPickerFor(contextMenu.taskId);
-              }}
-            >
+            <button className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={() => setColorPickerFor(contextMenu.taskId)}>
               <TbPalette size={14} /> Cambiar color
             </button>
           )}
-
           <div className="border-t my-1" style={{ borderColor }} />
-
           {(() => {
             const task = tasks.find(t => t.id === contextMenu.taskId);
             if (!task) return null;
-            const otherGroups = groups;
-            if (otherGroups.length > 0) {
+            if (groups.length > 0) {
               return (
                 <div className="px-4 py-2">
                   <div className="text-[10px] mb-1" style={{ color: textMuted }}>Grupo:</div>
-                  <select
-                    className="w-full text-xs border rounded px-2 py-1"
-                    style={{ borderColor, backgroundColor: cardBg, color: textPrimary }}
-                    defaultValue={task.group_id || ''}
-                    onChange={(e) => {
-                      const val = e.target.value;
-                      updateTask(task.id, { group_id: val ? parseInt(val) : null });
-                      setContextMenu(null);
-                    }}
-                  >
+                  <select className="w-full text-xs border rounded px-2 py-1" style={{ borderColor, backgroundColor: cardBg, color: textPrimary }} defaultValue={task.group_id || ''} onChange={(e) => { const val = e.target.value; updateTask(task.id, { group_id: val ? parseInt(val) : null }); setContextMenu(null); }}>
                     <option value="">Sin grupo</option>
-                    {otherGroups.map(g => (
-                      <option key={g.id} value={g.id}>{g.name}</option>
-                    ))}
+                    {groups.map(g => <option key={g.id} value={g.id}>{g.name}</option>)}
                   </select>
                 </div>
               );
             }
             return null;
           })()}
-
-          <button
-            className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
-            style={{ color: textPrimary }}
-            onClick={() => {
-              setLinkMode({ fromTaskId: contextMenu.taskId });
-              setContextMenu(null);
-            }}
-          >
+          <button className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={() => { setLinkMode({ fromTaskId: contextMenu.taskId }); setContextMenu(null); }}>
             <TbLink size={14} /> Agregar dependencia
           </button>
-
-          {tasks.find(t => t.id === contextMenu.taskId)?.dependencies &&
-           tasks.find(t => t.id === contextMenu.taskId)!.dependencies.length > 0 && (
+          {tasks.find(t => t.id === contextMenu.taskId)?.dependencies && tasks.find(t => t.id === contextMenu.taskId)!.dependencies.length > 0 && (
             <div className="px-4 py-2">
               <div className="text-[10px] mb-1" style={{ color: textMuted }}>Dependencias:</div>
               {tasks.find(t => t.id === contextMenu.taskId)!.dependencies.map(depId => {
@@ -1576,82 +1235,37 @@ export default function App() {
                 if (!depTask) return null;
                 return (
                   <div key={depId} className="flex items-center justify-between text-[11px] py-1">
-                    <span className="flex items-center gap-1">
-                      <div
-                        className="w-2 h-2 rounded-full"
-                        style={{ backgroundColor: depTask.color || '#4caf50' }}
-                      />
-                      {depTask.name}
-                    </span>
-                     <button
-                       className="text-red-400 hover:text-red-600 text-[10px] font-bold"
-                       onClick={async () => {
-                         try {
-                           await fetch(`${API_URL}/tasks/${contextMenu.taskId}/dependencies/${depId}`, {
-                             method: 'DELETE',
-                           });
-                           await fetchTasks();
-                         } catch (err) {
-                           console.error('Error removing dependency:', err);
-                         }
-                       }}
-                     >
-                       <TbX size={12} />
-                     </button>
+                    <span className="flex items-center gap-1"><div className="w-2 h-2 rounded-full" style={{ backgroundColor: depTask.color || '#4caf50' }} />{depTask.name}</span>
+                    <button className="text-red-400 hover:text-red-600 text-[10px] font-bold" onClick={async () => { await fetch(`${API_URL}/tasks/${contextMenu.taskId}/dependencies/${depId}`, { method: 'DELETE' }); await fetchTasks(); }}><TbX size={12} /></button>
                   </div>
                 );
               })}
             </div>
           )}
-
           <div className="border-t my-1" style={{ borderColor }} />
-
-          <button
-            className="w-full px-4 py-2 text-left text-xs hover:bg-red-50 text-red-500 flex items-center gap-2"
-            onClick={() => {
-              deleteTask(contextMenu.taskId);
-              setContextMenu(null);
-            }}
-          >
+          <button className="w-full px-4 py-2 text-left text-xs hover:bg-red-50 text-red-500 flex items-center gap-2" onClick={() => { deleteTask(contextMenu.taskId); setContextMenu(null); }}>
             <TbTrash size={14} /> Eliminar tarea
           </button>
         </div>
       )}
 
       {(() => {
-        const hasPreview = previewAttachment !== null;
-        if (!hasPreview) return null;
-        const att = previewAttachment!;
+        if (!previewAttachment) return null;
+        const att = previewAttachment;
         return (
-          <div
-            className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 anim-overlay"
-            onClick={() => setPreviewAttachment(null)}
-            onKeyDown={(e) => { if (e.key === 'Escape') setPreviewAttachment(null); }}
-            tabIndex={0}
-            ref={(el) => { if (el) el.focus(); }}
-          >
-            <div
-              className="relative max-w-[90vw] max-h-[85vh] anim-lightbox"
-              onClick={(e) => e.stopPropagation()}
-            >
+          <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 anim-overlay" onClick={() => setPreviewAttachment(null)} tabIndex={0} ref={(el) => el?.focus()}>
+            <div className="relative max-w-[90vw] max-h-[85vh] anim-lightbox" onClick={(e) => e.stopPropagation()}>
               {getFileCategory(att.file_type, att.file_name) === '3d' ? (
                 <div className="w-[80vw] h-[70vh] rounded-lg overflow-hidden shadow-2xl bg-[#1a1a1a]">
                   <Viewer3D src={att.file_data} fileName={att.file_name} />
                 </div>
               ) : (
-                <img
-                  src={att.file_data}
-                  alt={att.file_name}
-                  className="max-w-full max-h-[85vh] rounded-lg shadow-2xl object-contain"
-                />
+                <img src={att.file_data} alt={att.file_name} className="max-w-full max-h-[85vh] rounded-lg shadow-2xl object-contain" />
               )}
               <div className="absolute bottom-0 inset-x-0 bg-black/60 px-4 py-2 rounded-b-lg">
                 <div className="text-xs text-white text-center truncate">{att.file_name}</div>
               </div>
-              <button
-                className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 rounded-full p-1.5 text-white transition-colors"
-                onClick={() => setPreviewAttachment(null)}
-              >
+              <button className="absolute top-2 right-2 bg-black/50 hover:bg-black/70 rounded-full p-1.5 text-white transition-colors" onClick={() => setPreviewAttachment(null)}>
                 <TbX size={16} />
               </button>
             </div>
@@ -1663,74 +1277,22 @@ export default function App() {
         const task = tasks.find(t => t.id === detailModal.taskId);
         if (!task) return null;
         return (
-          <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 anim-overlay"
-            onClick={() => setDetailModal(null)}
-          >
-            <div
-              className="rounded-xl shadow-2xl w-[420px] max-h-[80vh] overflow-y-auto anim-modal"
-              style={{ backgroundColor: cardBg }}
-              onClick={(e) => e.stopPropagation()}
-            >
-              <div
-                className="px-6 py-4 rounded-t-xl flex items-center justify-between"
-                style={{ backgroundColor: hexToRgba(task.color || '#4caf50', 0.15) }}
-              >
-                <h2 className="text-sm font-bold" style={{ color: darkenColor(task.color || '#4caf50', 0.6) }}>
-                  Detalles de la tarea
-                </h2>
-                <button
-                  className="text-lg font-bold"
-                  style={{ color: textMuted }}
-                  onClick={() => setDetailModal(null)}
-                >
-                  <TbX size={18} />
-                </button>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 anim-overlay" onClick={() => setDetailModal(null)}>
+            <div className="rounded-xl shadow-2xl w-[420px] max-h-[80vh] overflow-y-auto anim-modal" style={{ backgroundColor: cardBg }} onClick={(e) => e.stopPropagation()}>
+              <div className="px-6 py-4 rounded-t-xl flex items-center justify-between" style={{ backgroundColor: hexToRgba(task.color || '#4caf50', 0.15) }}>
+                <h2 className="text-sm font-bold" style={{ color: darkenColor(task.color || '#4caf50', 0.6) }}>Detalles de la tarea</h2>
+                <button className="text-lg font-bold" style={{ color: textMuted }} onClick={() => setDetailModal(null)}><TbX size={18} /></button>
               </div>
-
               <div className="px-6 py-4 space-y-4">
                 <div>
                   <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Nombre</label>
-                  <input
-                    className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none"
-                    style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }}
-                    defaultValue={task.name}
-                    onBlur={(e) => {
-                      if (e.target.value !== task.name) {
-                        updateTask(task.id, { name: e.target.value });
-                      }
-                    }}
-                    onKeyDown={(e) => {
-                      if (e.key === 'Enter') (e.target as HTMLInputElement).blur();
-                    }}
-                  />
+                  <input className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} defaultValue={task.name} onBlur={(e) => { if (e.target.value !== task.name) updateTask(task.id, { name: e.target.value }); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
                 </div>
-
-                <div
-                  ref={dropZoneRef}
-                  className={`relative rounded-lg transition-colors ${dragOverTaskId === task.id ? 'bg-blue-50 ring-2 ring-blue-300' : ''}`}
-                  onDragEnter={(e) => { e.preventDefault(); setDragOverTaskId(task.id); }}
-                  onDragOver={(e) => { e.preventDefault(); setDragOverTaskId(task.id); }}
-                  onDragLeave={() => setDragOverTaskId(null)}
-                  onDrop={(e) => handleDropZone(e, task.id)}
-                >
+                <div ref={dropZoneRef} className={`relative rounded-lg transition-colors ${dragOverTaskId === task.id ? 'bg-blue-50 ring-2 ring-blue-300' : ''}`} onDragEnter={(e) => { e.preventDefault(); setDragOverTaskId(task.id); }} onDragOver={(e) => { e.preventDefault(); setDragOverTaskId(task.id); }} onDragLeave={() => setDragOverTaskId(null)} onDrop={(e) => handleDropZone(e, task.id)}>
                   <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Notas</label>
-                  <textarea
-                    className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none min-h-[60px] resize-y"
-                    style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }}
-                    defaultValue={task.notes || ''}
-                    placeholder="Agregar notas..."
-                    onBlur={(e) => {
-                      updateTask(task.id, { notes: e.target.value });
-                    }}
-                    onPaste={(e) => handlePasteToAttachments(e, task.id)}
-                  />
+                  <textarea className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none min-h-[60px] resize-y" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} defaultValue={task.notes || ''} placeholder="Agregar notas..." onBlur={(e) => updateTask(task.id, { notes: e.target.value })} onPaste={(e) => handlePasteToAttachments(e, task.id)} />
                   <div className="flex items-center gap-2 mt-2">
-                    <button
-                      className="flex items-center gap-1 px-2 py-1 text-[10px] rounded text-gray-600"
-                      style={{ backgroundColor: isDark ? '#3a3a3a' : '#f0f0f0' }}
-                      onClick={() => handleAttachFile(task.id)}
-                    >
+                    <button className="flex items-center gap-1 px-2 py-1 text-[10px] rounded text-gray-600" style={{ backgroundColor: isDark ? '#3a3a3a' : '#f0f0f0' }} onClick={() => handleAttachFile(task.id)}>
                       <TbPaperclip size={12} /> Adjuntar archivo
                     </button>
                   </div>
@@ -1743,202 +1305,95 @@ export default function App() {
                             <span>{pct}%</span>
                           </div>
                           <div className="w-full h-1.5 rounded-full overflow-hidden" style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0' }}>
-                            <div
-                              className="h-full rounded-full transition-all duration-200"
-                              style={{
-                                width: `${pct}%`,
-                                backgroundColor: pct === 100 ? '#4caf50' : '#2196f3',
-                              }}
-                            />
+                            <div className="h-full rounded-full transition-all duration-200" style={{ width: `${pct}%`, backgroundColor: pct === 100 ? '#4caf50' : '#2196f3' }} />
                           </div>
                         </div>
                       ))}
                     </div>
                   )}
                   <div className="flex items-center gap-1 mt-1 text-[10px]" style={{ color: textMuted }}>
-                    <TbPhoto size={12} />
-                    <span>Arrastrá archivos aquí o pegá imágenes con Ctrl+V</span>
+                    <TbPhoto size={12} /> Arrastrá archivos aquí o pegá imágenes con Ctrl+V
                   </div>
                 </div>
-
                 {task.attachments && task.attachments.length > 0 && (
                   <div>
-                    <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>
-                      Archivos adjuntos ({task.attachments.length})
-                    </label>
+                    <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Archivos adjuntos ({task.attachments.length})</label>
                     <div className="mt-2 grid grid-cols-3 gap-2">
                       {task.attachments.map((att) => {
                         const cat = getFileCategory(att.file_type, att.file_name);
                         if (cat === 'image') {
                           return (
                             <div key={att.id} className="relative group cursor-pointer rounded-lg overflow-hidden border" style={{ borderColor, backgroundColor: subtleBg }}>
-                              <img
-                                src={att.file_data}
-                                alt={att.file_name}
-                                className="w-full h-20 object-cover"
-                                onClick={() => setPreviewAttachment(att)}
-                              />
-                              <div className="absolute bottom-0 inset-x-0 bg-black/50 px-1 py-0.5">
-                                <div className="text-[8px] text-white truncate">{att.file_name}</div>
-                              </div>
-                              <button
-                                className="absolute top-1 right-1 bg-black/50 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                                onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}
-                              >
-                                <TbX size={10} className="text-white" />
-                              </button>
+                              <img src={att.file_data} alt={att.file_name} className="w-full h-20 object-cover" onClick={() => setPreviewAttachment(att)} />
+                              <div className="absolute bottom-0 inset-x-0 bg-black/50 px-1 py-0.5"><div className="text-[8px] text-white truncate">{att.file_name}</div></div>
+                              <button className="absolute top-1 right-1 bg-black/50 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}><TbX size={10} className="text-white" /></button>
                             </div>
                           );
                         }
                         if (cat === 'video') {
                           return (
                             <div key={att.id} className="relative group rounded-lg overflow-hidden border bg-black" style={{ borderColor }}>
-                              <video
-                                src={att.file_data}
-                                controls
-                                className="w-full h-20 object-cover"
-                              />
-                              <div className="absolute bottom-0 inset-x-0 bg-black/50 px-1 py-0.5">
-                                <div className="text-[8px] text-white truncate">{att.file_name}</div>
-                              </div>
-                              <button
-                                className="absolute top-1 right-1 bg-black/50 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                                onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}
-                              >
-                                <TbX size={10} className="text-white" />
-                              </button>
+                              <video src={att.file_data} controls className="w-full h-20 object-cover" />
+                              <div className="absolute bottom-0 inset-x-0 bg-black/50 px-1 py-0.5"><div className="text-[8px] text-white truncate">{att.file_name}</div></div>
+                              <button className="absolute top-1 right-1 bg-black/50 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}><TbX size={10} className="text-white" /></button>
                             </div>
                           );
                         }
                         if (cat === 'audio') {
                           return (
                             <div key={att.id} className="relative group rounded-lg overflow-hidden border p-2" style={{ borderColor, backgroundColor: subtleBg }}>
-                              <div className="flex items-center gap-1 mb-1">
-                                <TbPaperclip size={12} style={{ color: textMuted }} />
-                                <span className="text-[9px] truncate" style={{ color: textMuted }}>{att.file_name}</span>
-                              </div>
+                              <div className="flex items-center gap-1 mb-1"><TbPaperclip size={12} style={{ color: textMuted }} /><span className="text-[9px] truncate" style={{ color: textMuted }}>{att.file_name}</span></div>
                               <audio src={att.file_data} controls className="w-full h-8" />
-                              <button
-                                className="absolute top-1 right-1 bg-white border rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                                onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}
-                              >
-                                <TbX size={10} className="text-gray-500" />
-                              </button>
+                              <button className="absolute top-1 right-1 bg-white border rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}><TbX size={10} className="text-gray-500" /></button>
                             </div>
                           );
                         }
                         if (cat === '3d') {
                           return (
                             <div key={att.id} className="relative group rounded-lg overflow-hidden border cursor-pointer" style={{ borderColor, backgroundColor: '#1a1a1a' }} onClick={() => setPreviewAttachment(att)}>
-                              <div style={{ width: '100%', height: '80px' }}>
-                                <Viewer3D src={att.file_data} fileName={att.file_name} />
-                              </div>
-                              <div className="absolute bottom-0 inset-x-0 bg-black/50 px-1 py-0.5">
-                                <div className="text-[8px] text-white truncate">{att.file_name}</div>
-                              </div>
-                              <button
-                                className="absolute top-1 right-1 bg-black/50 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                                onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}
-                              >
-                                <TbX size={10} className="text-white" />
-                              </button>
+                              <div style={{ width: '100%', height: '80px' }}><Viewer3D src={att.file_data} fileName={att.file_name} /></div>
+                              <div className="absolute bottom-0 inset-x-0 bg-black/50 px-1 py-0.5"><div className="text-[8px] text-white truncate">{att.file_name}</div></div>
+                              <button className="absolute top-1 right-1 bg-black/50 rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}><TbX size={10} className="text-white" /></button>
                             </div>
                           );
                         }
                         return (
                           <div key={att.id} className="relative group rounded-lg overflow-hidden border p-2" style={{ borderColor, backgroundColor: subtleBg }}>
-                            <div className="flex items-center gap-1">
-                              <TbPaperclip size={12} style={{ color: textMuted }} />
-                              <span className="text-[9px] truncate" style={{ color: textSecondary }}>{att.file_name}</span>
-                            </div>
-                            <div className="flex gap-1 mt-1">
-                              <a
-                                href={att.file_data}
-                                download={att.file_name}
-                                className="text-[9px] text-blue-500 hover:underline flex items-center gap-0.5"
-                              >
-                                <TbDownload size={10} /> Descargar
-                              </a>
-                            </div>
-                            <button
-                              className="absolute top-1 right-1 bg-white border rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity"
-                              onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}
-                            >
-                              <TbX size={10} className="text-gray-500" />
-                            </button>
+                            <div className="flex items-center gap-1"><TbPaperclip size={12} style={{ color: textMuted }} /><span className="text-[9px] truncate" style={{ color: textSecondary }}>{att.file_name}</span></div>
+                            <div className="flex gap-1 mt-1"><a href={att.file_data} download={att.file_name} className="text-[9px] text-blue-500 hover:underline flex items-center gap-0.5"><TbDownload size={10} /> Descargar</a></div>
+                            <button className="absolute top-1 right-1 bg-white border rounded-full p-0.5 opacity-0 group-hover:opacity-100 transition-opacity" onClick={(e) => { e.stopPropagation(); handleDeleteAttachment(att.id); }}><TbX size={10} className="text-gray-500" /></button>
                           </div>
                         );
                       })}
                     </div>
                   </div>
                 )}
-
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Inicio</label>
-                    <input
-                      type="date"
-                      className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none"
-                      style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }}
-                      defaultValue={task.start_date}
-                      onChange={(e) => {
-                        updateTask(task.id, { start_date: e.target.value });
-                      }}
-                    />
+                    <input type="date" className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} defaultValue={task.start_date} onChange={(e) => updateTask(task.id, { start_date: e.target.value })} />
                   </div>
                   <div>
                     <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Fin</label>
-                    <input
-                      type="date"
-                      className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none"
-                      style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }}
-                      defaultValue={task.end_date}
-                      onChange={(e) => {
-                        updateTask(task.id, { end_date: e.target.value });
-                      }}
-                    />
+                    <input type="date" className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} defaultValue={task.end_date} onChange={(e) => updateTask(task.id, { end_date: e.target.value })} />
                   </div>
                 </div>
-
                 <div>
                   <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Estado</label>
-                  <select
-                    className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none"
-                    style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }}
-                    defaultValue={task.status || 'pendiente'}
-                    onChange={(e) => {
-                      updateTask(task.id, { status: e.target.value });
-                    }}
-                  >
-                    {STATUS_OPTIONS.map(s => (
-                      <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>
-                    ))}
+                  <select className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} defaultValue={task.status || 'pendiente'} onChange={(e) => updateTask(task.id, { status: e.target.value })}>
+                    {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
                   </select>
                 </div>
-
                 <div>
                   <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Color</label>
                   <div className="flex gap-2 mt-2 flex-wrap">
                     {PRESET_COLORS.map(color => (
-                      <button
-                        key={color}
-                        className="w-7 h-7 rounded-full border-2 hover:scale-110 transition-transform"
-                        style={{
-                          backgroundColor: color,
-                          borderColor: task.color === color ? '#333' : 'transparent',
-                        }}
-                        onClick={() => {
-                          updateTask(task.id, { color });
-                        }}
-                      />
+                      <button key={color} className="w-7 h-7 rounded-full border-2 hover:scale-110 transition-transform" style={{ backgroundColor: color, borderColor: task.color === color ? '#333' : 'transparent' }} onClick={() => updateTask(task.id, { color })} />
                     ))}
                   </div>
                 </div>
-
                 <div>
-                  <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>
-                    Dependencias ({task.dependencies?.length || 0})
-                  </label>
+                  <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Dependencias ({task.dependencies?.length || 0})</label>
                   {task.dependencies && task.dependencies.length > 0 ? (
                     <div className="mt-2 space-y-1">
                       {task.dependencies.map(depId => {
@@ -1947,33 +1402,15 @@ export default function App() {
                         return (
                           <div key={depId} className="flex items-center justify-between px-3 py-2 rounded-lg" style={{ backgroundColor: subtleBg }}>
                             <span className="flex items-center gap-2 text-xs">
-                              <div
-                                className="w-2.5 h-2.5 rounded-full"
-                                style={{ backgroundColor: depTask.color || '#4caf50' }}
-                              />
+                              <div className="w-2.5 h-2.5 rounded-full" style={{ backgroundColor: depTask.color || '#4caf50' }} />
                               {depTask.name}
-                              {task.start_date === depTask.end_date && (
-                                <span className="text-[10px] text-orange-500">(mismo día)</span>
-                              )}
                             </span>
-                            <button
-                              className="text-red-400 hover:text-red-600 text-xs font-bold"
-                              onClick={async () => {
-                                await fetch(`${API_URL}/tasks/${task.id}/dependencies/${depId}`, {
-                                  method: 'DELETE',
-                                });
-                                await fetchTasks();
-                              }}
-                            >
-                              ✕
-                            </button>
+                            <button className="text-red-400 hover:text-red-600 text-xs font-bold" onClick={async () => { await fetch(`${API_URL}/tasks/${task.id}/dependencies/${depId}`, { method: 'DELETE' }); await fetchTasks(); }}>✕</button>
                           </div>
                         );
                       })}
                     </div>
-                  ) : (
-                    <p className="text-[11px] mt-2" style={{ color: textMuted }}>Sin dependencias</p>
-                  )}
+                  ) : <p className="text-[11px] mt-2" style={{ color: textMuted }}>Sin dependencias</p>}
                 </div>
               </div>
             </div>
