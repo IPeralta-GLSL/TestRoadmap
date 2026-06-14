@@ -87,7 +87,27 @@ export default function App() {
   const [dragging, setDragging] = useState<DragState | null>(null);
   const [dragDelta, setDragDelta] = useState(0);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const sidebarRef = useRef<HTMLDivElement>(null);
   const calendarContainerRef = useRef<HTMLDivElement>(null);
+  const isSyncingScroll = useRef(false);
+
+  const handleSidebarScroll = () => {
+    if (isSyncingScroll.current) return;
+    isSyncingScroll.current = true;
+    if (scrollRef.current && sidebarRef.current) {
+      scrollRef.current.scrollTop = sidebarRef.current.scrollTop;
+    }
+    requestAnimationFrame(() => { isSyncingScroll.current = false; });
+  };
+
+  const handleCalendarScroll = () => {
+    if (isSyncingScroll.current) return;
+    isSyncingScroll.current = true;
+    if (sidebarRef.current && scrollRef.current) {
+      sidebarRef.current.scrollTop = scrollRef.current.scrollTop;
+    }
+    requestAnimationFrame(() => { isSyncingScroll.current = false; });
+  };
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const [detailModal, setDetailModal] = useState<DetailModalState | null>(null);
   const [linkMode, setLinkMode] = useState<{ fromTaskId: number } | null>(null);
@@ -620,7 +640,7 @@ export default function App() {
     });
   };
 
-  const getTaskGroupTopPx = (task: Task): { top: number; left: number; width: number } | null => {
+  const getTaskGroupTopPx = (task: Task): { top: number; left: number; width: number; height: number } | null => {
     for (const group of groups) {
       if (group.collapsed && task.group_id === group.id) {
         const groupRowIdx = sidebarRows.findIndex(r => r.type === 'group-header' && r.groupId === group.id);
@@ -629,10 +649,9 @@ export default function App() {
         const sIdx = getDayIndex(task.start_date, viewStart);
         const eIdx = getDayIndex(task.end_date, viewStart);
         const dur = eIdx - sIdx;
-        const tLeft = sIdx * dayWidth;
-        const tWidth = Math.max(dur * dayWidth, dayWidth);
-        const midLeft = tLeft + tWidth / 2;
-        return { top: topPx, left: midLeft - 4, width: 8 };
+        const ctLeft = sIdx * dayWidth;
+        const ctWidth = Math.max(dur * dayWidth, dayWidth);
+        return { top: topPx + GROUP_HEADER_HEIGHT - 12, left: ctLeft + 2, width: ctWidth - 4, height: 8 };
       }
     }
     return null;
@@ -649,7 +668,7 @@ export default function App() {
       if (!taskRect) {
         const collapsedRect = getTaskGroupTopPx(task);
         if (collapsedRect) {
-          taskRect = { task, left: collapsedRect.left, width: collapsedRect.width, top: collapsedRect.top + 8, height: ROW_HEIGHT - 16, isInvalid: false };
+          taskRect = { task, left: collapsedRect.left, width: collapsedRect.width, top: collapsedRect.top, height: collapsedRect.height, isInvalid: false };
           taskCollapsed = true;
         }
       }
@@ -663,7 +682,7 @@ export default function App() {
           if (!depTask) return;
           const collapsedRect = getTaskGroupTopPx(depTask);
           if (collapsedRect) {
-            depRect = { task: depTask, left: collapsedRect.left, width: collapsedRect.width, top: collapsedRect.top + 8, height: ROW_HEIGHT - 16, isInvalid: false };
+            depRect = { task: depTask, left: collapsedRect.left, width: collapsedRect.width, top: collapsedRect.top, height: collapsedRect.height, isInvalid: false };
             depCollapsed = true;
           }
         }
@@ -872,7 +891,7 @@ export default function App() {
     return 'other';
   };
 
-  const GROUP_HEADER_HEIGHT = ROW_HEIGHT;
+  const GROUP_HEADER_HEIGHT = 48;
 
   interface SidebarRow {
     type: 'group-header' | 'ungrouped-header' | 'task';
@@ -909,7 +928,7 @@ export default function App() {
   const textMuted = isDark ? '#666666' : '#999999';
 
   return (
-    <div className="h-screen flex flex-col" style={{ backgroundColor: tBg, color: textPrimary }}>
+    <div className="h-screen flex flex-col" style={{ backgroundColor: tBg, color: textPrimary, transition: 'background-color 0.3s ease, color 0.3s ease' }}>
       <input
         type="file"
         ref={fileInputRef}
@@ -981,9 +1000,13 @@ export default function App() {
       </div>
 
       <div className="flex flex-1 overflow-hidden">
-        <div className="w-48 border-r flex-shrink-0 overflow-y-auto" style={{ borderColor, backgroundColor: cardBg }}>
+        <div ref={sidebarRef} className="w-48 border-r flex-shrink-0 overflow-y-auto" style={{ borderColor, backgroundColor: cardBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }} onScroll={handleSidebarScroll}>
 
-          <div className="relative" ref={addDropdownRef}>
+          <div
+            className="sticky top-0 z-10"
+            ref={addDropdownRef}
+            style={{ backgroundColor: cardBg }}
+          >
             <button
               onClick={() => setShowAddDropdown(!showAddDropdown)}
               className="w-full flex items-center justify-center gap-1 px-2 py-2 text-xs font-medium border-b hover:opacity-80 transition-colors"
@@ -1153,6 +1176,7 @@ export default function App() {
         <div
           className="flex-1 overflow-x-auto overflow-y-auto"
           ref={scrollRef}
+          onScroll={handleCalendarScroll}
         >
           <div
             className="relative"
@@ -1160,7 +1184,7 @@ export default function App() {
             style={{ minWidth: numDays * dayWidth }}
           >
             <div className="h-px" style={{ backgroundColor: borderColor }} />
-            <div className="flex border-b sticky top-0 z-10" style={{ borderColor, backgroundColor: subtleBg }}>
+          <div className="flex border-b sticky top-0 z-10" style={{ borderColor, backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
               {weeks.map((week, wi) => (
                 <div key={wi} className="flex" style={{ width: week.days.length * dayWidth }}>
                   <div
@@ -1173,7 +1197,7 @@ export default function App() {
               ))}
             </div>
 
-            <div className="flex border-b sticky top-0 z-10" style={{ borderColor, backgroundColor: subtleBg }}>
+            <div className="flex border-b sticky top-0 z-10" style={{ borderColor, backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
               {calendarDays.map((day, i) => {
                 const dayOfWeek = day.getDay();
                 const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
