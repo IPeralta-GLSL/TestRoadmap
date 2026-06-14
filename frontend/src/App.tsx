@@ -629,6 +629,17 @@ export default function App() {
     });
   };
 
+  const getTaskY = (taskId: number): number => {
+    let y = 0;
+    for (const row of sidebarRows) {
+      if (row.type === 'task' && row.task?.id === taskId) return y;
+      y += row.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT;
+    }
+    return 0;
+  };
+
+  const totalRowsHeight = sidebarRows.reduce((t, r) => t + (r.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT), 0);
+
   const getTaskGroupRect = (task: Task): { left: number; width: number } | null => {
     for (const group of groups) {
       if (group.collapsed && task.group_id === group.id) {
@@ -643,52 +654,63 @@ export default function App() {
     return null;
   };
 
-  const renderRowArrows = (rowTask: Task, rowRect: { left: number; width: number }) => {
-    if (!rowTask.dependencies || rowTask.dependencies.length === 0) return null;
+  const renderArrows = () => {
     const rects = getTaskRects();
     const arrows: React.ReactNode[] = [];
 
-    rowTask.dependencies.forEach(depId => {
-      let depRect = rects.find(r => r.task.id === depId);
-      let depCollapsed = false;
-      if (!depRect) {
+    tasks.forEach(task => {
+      if (!task.dependencies || task.dependencies.length === 0) return;
+      const taskRect = rects.find(r => r.task.id === task.id);
+      if (!taskRect) {
+        const group = task.group_id ? groups.find(g => g.id === task.group_id) : null;
+        if (!group || !group.collapsed) return;
+        return;
+      }
+      const taskY = getTaskY(task.id);
+
+      task.dependencies.forEach(depId => {
+        let depRect = rects.find(r => r.task.id === depId);
+        if (!depRect) {
+          const depTask = tasks.find(t => t.id === depId);
+          if (!depTask) return;
+          const collapsedRect = getTaskGroupRect(depTask);
+          if (collapsedRect) {
+            const depY = getTaskY(depId);
+            const fromX = collapsedRect.left + collapsedRect.width;
+            const fromY = depY + ROW_HEIGHT / 2;
+            const toX = taskRect.left;
+            const toY = taskY + ROW_HEIGHT / 2;
+            const midX = fromX + (toX - fromX) / 2;
+            arrows.push(
+              <path key={`arrow-${task.id}-${depId}`} d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`} stroke={darkenColor(task.color || '#4caf50', 0.6)} strokeWidth={2} fill="none" />
+            );
+          }
+          return;
+        }
         const depTask = tasks.find(t => t.id === depId);
         if (!depTask) return;
-        const collapsedRect = getTaskGroupRect(depTask);
-        if (collapsedRect) {
-          depRect = { task: depTask, left: collapsedRect.left, width: collapsedRect.width, isInvalid: false };
-          depCollapsed = true;
-        }
-      }
-      if (!depRect) return;
+        const depY = getTaskY(depId);
+        const fromX = depRect.left + depRect.width;
+        const fromY = depY + ROW_HEIGHT / 2;
+        const toX = taskRect.left;
+        const toY = taskY + ROW_HEIGHT / 2;
+        const midX = fromX + (toX - fromX) / 2;
 
-      const depTask = tasks.find(t => t.id === depId);
-      if (!depTask) return;
-
-      const fromX = depRect.left + depRect.width;
-      const fromY = ROW_HEIGHT / 2;
-      const toX = rowRect.left;
-      const toY = ROW_HEIGHT / 2;
-      const midX = fromX + (toX - fromX) / 2;
-
-      arrows.push(
-        <path
-          key={`arrow-${rowTask.id}-${depId}`}
-          d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`}
-          stroke={darkenColor(rowTask.color || '#4caf50', 0.6)}
-          strokeWidth={2}
-          fill="none"
-        />
-      );
+        arrows.push(
+          <path key={`arrow-${task.id}-${depId}`} d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`} stroke={darkenColor(task.color || '#4caf50', 0.6)} strokeWidth={2} fill="none" />
+        );
+      });
     });
 
     if (arrows.length === 0) return null;
     return (
-      <svg style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', pointerEvents: 'none', zIndex: 5 }}>
+      <svg style={{ position: 'absolute', top: 46, left: SIDEBAR_W, width: numDays * dayWidth, height: totalRowsHeight, pointerEvents: 'none', zIndex: 5 }}>
         <defs>
-          <marker id={`arrowhead-${rowTask.id}`} markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
-            <polygon points="0 0, 8 3, 0 6" fill={darkenColor(rowTask.color || '#4caf50', 0.6)} />
-          </marker>
+          {tasks.filter(t => t.dependencies && t.dependencies.length > 0).map(task => (
+            <marker key={`marker-${task.id}`} id={`arrowhead-${task.id}`} markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
+              <polygon points="0 0, 8 3, 0 6" fill={darkenColor(task.color || '#4caf50', 0.6)} />
+            </marker>
+          ))}
         </defs>
         {arrows}
       </svg>
@@ -911,18 +933,11 @@ export default function App() {
           >
             <div className="h-px" style={{ backgroundColor: borderColor }} />
 
-            <div
-              className="flex sticky top-0 z-20"
-              style={{ height: 31, backgroundColor: cardBg, borderBottom: `1px solid ${borderColor}` }}
-            >
+            <div className="flex border-b sticky top-0 z-20" style={{ borderColor, backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
               <div
                 ref={addDropdownRef}
-                className="relative flex-shrink-0 flex items-center justify-center border-r text-[11px] font-medium hover:opacity-80 transition-colors cursor-pointer"
-                style={{
-                  width: SIDEBAR_W,
-                  borderColor,
-                  color: '#4caf50',
-                }}
+                className="relative flex-shrink-0 flex items-center justify-center border-r text-[11px] font-medium hover:opacity-80 transition-colors cursor-pointer sticky left-0"
+                style={{ width: SIDEBAR_W, borderColor, color: '#4caf50', backgroundColor: subtleBg, zIndex: 30 }}
                 onClick={() => setShowAddDropdown(!showAddDropdown)}
               >
                 Agregar ▾
@@ -937,10 +952,6 @@ export default function App() {
                   </div>
                 )}
               </div>
-              <div className="flex-1" />
-            </div>
-
-            <div className="flex border-b sticky top-0 z-10" style={{ borderColor, backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
               {weeks.map((week, wi) => (
                 <div key={wi} className="flex" style={{ width: week.days.length * dayWidth }}>
                   <div className="text-[10px] font-medium px-1 py-1" style={{ width: week.days.length * dayWidth, color: textMuted }}>
@@ -951,7 +962,7 @@ export default function App() {
             </div>
 
             <div className="flex border-b sticky top-0 z-10" style={{ borderColor, backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
-              <div className="flex-shrink-0 border-r" style={{ width: SIDEBAR_W, borderColor, backgroundColor: subtleBg }} />
+              <div className="flex-shrink-0 border-r sticky left-0" style={{ width: SIDEBAR_W, borderColor, backgroundColor: subtleBg, zIndex: 25 }} />
               {calendarDays.map((day, i) => {
                 const dayOfWeek = day.getDay();
                 const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
@@ -993,8 +1004,8 @@ export default function App() {
                     onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
                   >
                     <div
-                      className="flex-shrink-0 border-r flex items-center px-2 gap-1"
-                      style={{ width: SIDEBAR_W, borderColor, borderLeft: `3px solid ${group.color}` }}
+                      className="flex-shrink-0 border-r flex items-center px-2 gap-1 sticky left-0"
+                      style={{ width: SIDEBAR_W, borderColor, borderLeft: `3px solid ${group.color}`, backgroundColor: subtleBg, zIndex: 25 }}
                     >
                       <button onClick={() => toggleGroupCollapse(group.id)} style={{ color: textMuted }}>
                         {group.collapsed ? <TbChevronRight size={9} /> : <TbChevronDown size={9} />}
@@ -1029,8 +1040,8 @@ export default function App() {
                 return (
                   <div key="ungrouped" className="flex border-b" style={{ height: GROUP_HEADER_HEIGHT, borderBottom: `1px solid ${borderColor}` }}>
                     <div
-                      className="flex-shrink-0 border-r flex items-center px-2"
-                      style={{ width: SIDEBAR_W, borderColor }}
+                      className="flex-shrink-0 border-r flex items-center px-2 sticky left-0"
+                      style={{ width: SIDEBAR_W, borderColor, backgroundColor: cardBg, zIndex: 25 }}
                       onDragOver={(e) => handleGroupDragOver(e, null)}
                       onDrop={(e) => handleGroupDrop(e, null)}
                       onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
@@ -1068,18 +1079,19 @@ export default function App() {
               const isHovered = hoveredTask === task.id;
               const group = row.groupId ? groups.find(g => g.id === row.groupId) : null;
               const groupColor = group?.color || '#888';
-              const groupBg = hexToRgba(groupColor, 0.08);
+              const groupBg = cardBg;
 
               return (
                 <div key={task.id} className="flex border-b" style={{ height: ROW_HEIGHT, borderBottom: `1px solid ${borderColor}` }}>
                   <div
-                    className="flex-shrink-0 border-r flex items-center px-2 gap-1 cursor-pointer"
+                    className="flex-shrink-0 border-r flex items-center px-2 gap-1 cursor-pointer sticky left-0"
                     style={{
                       width: SIDEBAR_W,
                       borderColor,
                       backgroundColor: sidebarDragHighlight(row.groupId ?? null) ? hexToRgba(groupColor, 0.25) : groupBg,
                       borderLeft: `3px solid ${groupColor}`,
                       transition: 'background-color 0.15s ease, opacity 0.15s ease',
+                      zIndex: 20,
                     }}
                     draggable
                     onDragStart={(e) => handleSidebarDragStart(e, task.id)}
@@ -1141,6 +1153,7 @@ export default function App() {
                       }}
                       onMouseEnter={() => setHoveredTask(task.id)}
                       onMouseLeave={() => setHoveredTask(null)}
+                      onContextMenu={(e) => handleContextMenu(e, task.id)}
                     >
                       <div className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none">
                         <span className="text-[10px] font-bold text-white truncate px-1" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}>
@@ -1163,11 +1176,12 @@ export default function App() {
                       <div className="absolute right-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-r-[3px]"
                         onMouseDown={(e) => { if (!linkMode) handleMouseDown(e, task.id, 'resize-right', task.start_date, task.end_date); }} />
                     </div>
-                    {renderRowArrows(task, { left: taskLeft, width: taskWidth })}
                   </div>
                 </div>
               );
             })}
+
+            {renderArrows()}
 
             {(() => {
               const todayIndex = differenceInDays(new Date(), viewStart);
