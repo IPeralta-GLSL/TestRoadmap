@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload, TbChevronDown, TbChevronRight, TbFolder, TbSun, TbMoon, TbAlertTriangle } from 'react-icons/tb';
+import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload, TbChevronDown, TbChevronRight, TbFolder, TbSun, TbMoon, TbAlertTriangle, TbSettings } from 'react-icons/tb';
 import { Task, Attachment, TaskGroup } from './types/Task';
 import Viewer3D from './components/Viewer3D';
 import { addDays, format, parseISO, differenceInDays, startOfWeek, isSameDay } from 'date-fns';
@@ -100,6 +100,10 @@ export default function App() {
   const dragStartRef = useRef<{ x: number; y: number; time: number; button: number } | null>(null);
   const [showAddDropdown, setShowAddDropdown] = useState(false);
   const addDropdownRef = useRef<HTMLDivElement>(null);
+  const [groupContextMenu, setGroupContextMenu] = useState<{ x: number; y: number; groupId: number } | null>(null);
+  const [editingGroupId, setEditingGroupId] = useState<number | null>(null);
+  const [groupColorPickerFor, setGroupColorPickerFor] = useState<number | null>(null);
+  const groupContextMenuRef = useRef<HTMLDivElement>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('roadmapper-theme') as 'light' | 'dark') || 'light';
   });
@@ -248,13 +252,17 @@ export default function App() {
         setContextMenu(null);
         setColorPickerFor(null);
       }
+      if (groupContextMenu && groupContextMenuRef.current && !groupContextMenuRef.current.contains(e.target as Node)) {
+        setGroupContextMenu(null);
+        setGroupColorPickerFor(null);
+      }
       if (showAddDropdown && addDropdownRef.current && !addDropdownRef.current.contains(e.target as Node)) {
         setShowAddDropdown(false);
       }
     };
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
-  }, [contextMenu, showAddDropdown]);
+  }, [contextMenu, groupContextMenu, showAddDropdown]);
 
   const addTask = async (groupId?: number | null) => {
     const today = new Date();
@@ -1032,17 +1040,59 @@ export default function App() {
                       onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
                     >
                       <div
-                        className="flex-shrink-0 border-r flex items-center px-2 gap-1 sticky left-0"
+                        className="flex-shrink-0 border-r flex items-center px-2 gap-1 sticky left-0 group"
                         style={{ width: SIDEBAR_W, borderColor, borderLeft: `3px solid ${group.color}`, backgroundColor: subtleBg, zIndex: 25 }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          setGroupContextMenu({ x: e.clientX, y: e.clientY, groupId: group.id });
+                          setGroupColorPickerFor(null);
+                        }}
                       >
                         <button onClick={() => toggleGroupCollapse(group.id)} style={{ color: textMuted }}>
                           {group.collapsed ? <TbChevronRight size={9} /> : <TbChevronDown size={9} />}
                         </button>
-                        <span className="flex-1 text-[9px] font-semibold truncate" style={{ color: textPrimary }}>
-                          {group.name}
-                        </span>
-                        {group.collapsed && <span className="text-[8px]" style={{ color: textMuted }}>{collapsedGroupTasks.length}</span>}
-                        <button onClick={() => deleteGroup(group.id)} className="text-gray-300 hover:text-red-500 text-[9px] font-bold">×</button>
+                        {editingGroupId === group.id ? (
+                          <input
+                            autoFocus
+                            className="flex-1 text-[9px] font-semibold px-1 border rounded outline-none"
+                            style={{ backgroundColor: cardBg, color: textPrimary, borderColor }}
+                            defaultValue={group.name}
+                            onBlur={(e) => {
+                              updateGroup(group.id, { name: e.target.value });
+                              setEditingGroupId(null);
+                            }}
+                            onKeyDown={(e) => {
+                              if (e.key === 'Enter') {
+                                updateGroup(group.id, { name: (e.target as HTMLInputElement).value });
+                                setEditingGroupId(null);
+                              }
+                            }}
+                          />
+                        ) : (
+                          <span
+                            className="flex-1 text-[9px] font-semibold truncate cursor-pointer hover:underline"
+                            style={{ color: textPrimary }}
+                            onDoubleClick={() => setEditingGroupId(group.id)}
+                            title="Doble clic para editar nombre"
+                          >
+                            {group.name}
+                          </span>
+                        )}
+                        {group.collapsed && <span className="text-[8px] mr-1" style={{ color: textMuted }}>{collapsedGroupTasks.length}</span>}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            setGroupContextMenu({ x: rect.left, y: rect.bottom, groupId: group.id });
+                            setGroupColorPickerFor(null);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-blue-500 p-0.5"
+                          title="Opciones de grupo"
+                        >
+                          <TbSettings size={11} />
+                        </button>
                       </div>
                       <div className="flex-1 relative">
                         {group.collapsed && collapsedGroupTasks.map(ct => {
@@ -1288,6 +1338,62 @@ export default function App() {
           <div className="border-t my-1" style={{ borderColor }} />
           <button className="w-full px-4 py-2 text-left text-xs hover:bg-red-50 text-red-500 flex items-center gap-2" onClick={() => { deleteTask(contextMenu.taskId); setContextMenu(null); }}>
             <TbTrash size={14} /> Eliminar tarea
+          </button>
+        </div>
+      )}
+
+      {groupContextMenu && (
+        <div ref={groupContextMenuRef} className="fixed z-50 border rounded-lg shadow-xl py-1 min-w-[200px] anim-context-menu" style={{ left: groupContextMenu.x, top: groupContextMenu.y, backgroundColor: cardBg, borderColor }}>
+          <button
+            className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+            style={{ color: textPrimary }}
+            onClick={() => {
+              setEditingGroupId(groupContextMenu.groupId);
+              setGroupContextMenu(null);
+            }}
+          >
+            <TbFileText size={14} /> Cambiar nombre
+          </button>
+          <div className="border-t my-1" style={{ borderColor }} />
+          {groupColorPickerFor === groupContextMenu.groupId ? (
+            <div className="px-4 py-2">
+              <div className="text-[10px] mb-2" style={{ color: textMuted }}>Color del grupo</div>
+              <div className="grid grid-cols-5 gap-1">
+                {PRESET_COLORS.map(color => {
+                  const grp = groups.find(g => g.id === groupContextMenu.groupId);
+                  return (
+                    <button
+                      key={color}
+                      className="w-6 h-6 rounded-full border-2 hover:scale-110 transition-transform"
+                      style={{ backgroundColor: color, borderColor: grp?.color === color ? '#333' : 'transparent' }}
+                      onClick={() => {
+                        updateGroup(groupContextMenu.groupId, { color });
+                        setGroupContextMenu(null);
+                        setGroupColorPickerFor(null);
+                      }}
+                    />
+                  );
+                })}
+              </div>
+            </div>
+          ) : (
+            <button
+              className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+              style={{ color: textPrimary }}
+              onClick={() => setGroupColorPickerFor(groupContextMenu.groupId)}
+            >
+              <TbPalette size={14} /> Cambiar color
+            </button>
+          )}
+          <div className="border-t my-1" style={{ borderColor }} />
+          <button
+            className="w-full px-4 py-2 text-left text-xs hover:bg-red-50 text-red-500 flex items-center gap-2"
+            onClick={() => {
+              deleteGroup(groupContextMenu.groupId);
+              setGroupContextMenu(null);
+            }}
+          >
+            <TbTrash size={14} /> Eliminar grupo
           </button>
         </div>
       )}
