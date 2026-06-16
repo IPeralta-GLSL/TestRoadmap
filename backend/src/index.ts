@@ -83,18 +83,25 @@ const migrateTasks = () => {
   if (!colNames.includes('notes')) {
     db.exec("ALTER TABLE tasks ADD COLUMN notes TEXT DEFAULT ''");
   }
+
+  const groupCols = db.prepare("PRAGMA table_info(task_groups)").all() as { name: string }[];
+  const groupColNames = groupCols.map(c => c.name);
+  if (!groupColNames.includes('position')) {
+    db.exec("ALTER TABLE task_groups ADD COLUMN position INTEGER DEFAULT 0");
+  }
+
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='task_attachments'").all();
   const groupTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='task_groups'").all();
   if (groupTables.length === 0) {
-db.exec(`
-  CREATE TABLE IF NOT EXISTS task_groups (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    name TEXT NOT NULL,
-    color TEXT DEFAULT '#607d8b',
-    collapsed INTEGER DEFAULT 0,
-    position INTEGER DEFAULT 0
-  )
-`);
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS task_groups (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        color TEXT DEFAULT '#607d8b',
+        collapsed INTEGER DEFAULT 0,
+        position INTEGER DEFAULT 0
+      )
+    `);
   }
   if (tables.length === 0) {
     db.exec(`
@@ -339,6 +346,103 @@ app.post('/api/tasks/reorder', (req, res) => {
     res.json({ message: 'Tasks reordered' });
   } catch (error) {
     res.status(500).json({ error: 'Error reordering tasks' });
+  }
+});
+
+app.get('/api/project/export', (_req, res) => {
+  try {
+    const tasks = db.prepare('SELECT * FROM tasks').all();
+    const groups = db.prepare('SELECT * FROM task_groups').all();
+    const dependencies = db.prepare('SELECT * FROM task_dependencies').all();
+    const attachments = db.prepare('SELECT * FROM task_attachments').all();
+    res.json({ tasks, groups, dependencies, attachments });
+  } catch (error) {
+    res.status(500).json({ error: 'Error exporting project' });
+  }
+});
+
+app.post('/api/project/import', (req, res) => {
+  try {
+    const { tasks, groups, dependencies, attachments } = req.body;
+    if (!Array.isArray(tasks) || !Array.isArray(groups)) {
+      res.status(400).json({ error: 'Invalid project data' });
+      return;
+    }
+
+    const runImport = db.transaction(() => {
+      db.prepare('DELETE FROM task_attachments').run();
+      db.prepare('DELETE FROM task_dependencies').run();
+      db.prepare('DELETE FROM tasks').run();
+      db.prepare('DELETE FROM task_groups').run();
+
+      const insertGroup = db.prepare(
+        'INSERT INTO task_groups (id, name, color, collapsed, position) VALUES (?, ?, ?, ?, ?)'
+      );
+      groups.forEach((g: any) => {
+        insertGroup.run(g.id, g.name, g.color || '#607d8b', g.collapsed ?? 0, g.position ?? 0);
+      });
+
+      const insertTask = db.prepare(
+        'INSERT INTO tasks (id, name, start_date, end_date, estimate, color, status, notes, group_id, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      );
+      tasks.forEach((t: any) => {
+        insertTask.run(
+          t.id,
+          t.name,
+          t.start_date,
+          t.end_date,
+          t.estimate || null,
+          t.color || '#4caf50',
+          t.status || 'pendiente',
+          t.notes || '',
+          t.group_id || null,
+          t.position ?? 0
+        );
+      });
+
+      if (Array.isArray(dependencies)) {
+        const insertDep = db.prepare(
+          'INSERT INTO task_dependencies (task_id, depends_on_id) VALUES (?, ?)'
+        );
+        dependencies.forEach((d: any) => {
+          insertDep.run(d.task_id, d.depends_on_id);
+        });
+      }
+
+      if (Array.isArray(attachments)) {
+        const insertAtt = db.prepare(
+          'INSERT INTO task_attachments (id, task_id, file_name, file_type, file_data, created_at) VALUES (?, ?, ?, ?, ?, ?)'
+        );
+        attachments.forEach((a: any) => {
+          insertAtt.run(a.id, a.task_id, a.file_name, a.file_type, a.file_data, a.created_at || null);
+        });
+      }
+    });
+
+    runImport();
+
+    io.emit('project-imported');
+
+    res.json({ message: 'Project imported successfully' });
+  } catch (error) {
+    console.error('Error importing project:', error);
+    res.status(500).json({ error: 'Error importing project' });
+  }
+});
+
+app.post('/api/project/clear', (_req, res) => {
+  try {
+    db.transaction(() => {
+      db.prepare('DELETE FROM task_attachments').run();
+      db.prepare('DELETE FROM task_dependencies').run();
+      db.prepare('DELETE FROM tasks').run();
+      db.prepare('DELETE FROM task_groups').run();
+    })();
+    io.emit('project-imported');
+    res.json({ message: 'Project cleared successfully' });
+  } catch (error) {
+    console.error('Error clearing project:', error);
+    res.status(500).json({ error: 'Error clearing project' });
   }
 });
 

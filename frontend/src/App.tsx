@@ -104,6 +104,12 @@ export default function App() {
   const [editingGroupId, setEditingGroupId] = useState<number | null>(null);
   const [groupColorPickerFor, setGroupColorPickerFor] = useState<number | null>(null);
   const groupContextMenuRef = useRef<HTMLDivElement>(null);
+  const [sidebarWidth, setSidebarWidth] = useState(() => {
+    return parseInt(localStorage.getItem('roadmapper-sidebar-width') || '192');
+  });
+  const [showProjectDropdown, setShowProjectDropdown] = useState(false);
+  const projectDropdownRef = useRef<HTMLDivElement>(null);
+  const projectFileInputRef = useRef<HTMLInputElement>(null);
   const [theme, setTheme] = useState<'light' | 'dark'>(() => {
     return (localStorage.getItem('roadmapper-theme') as 'light' | 'dark') || 'light';
   });
@@ -241,6 +247,11 @@ export default function App() {
       setGroups((prev) => prev.filter((g) => g.id !== groupId));
     });
 
+    socket.on('project-imported', () => {
+      fetchTasks();
+      fetchGroups();
+    });
+
     return () => {
       socket.disconnect();
     };
@@ -259,10 +270,13 @@ export default function App() {
       if (showAddDropdown && addDropdownRef.current && !addDropdownRef.current.contains(e.target as Node)) {
         setShowAddDropdown(false);
       }
+      if (showProjectDropdown && projectDropdownRef.current && !projectDropdownRef.current.contains(e.target as Node)) {
+        setShowProjectDropdown(false);
+      }
     };
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
-  }, [contextMenu, groupContextMenu, showAddDropdown]);
+  }, [contextMenu, groupContextMenu, showAddDropdown, showProjectDropdown]);
 
   const addTask = async (groupId?: number | null) => {
     const today = new Date();
@@ -330,6 +344,85 @@ export default function App() {
     const group = groups.find(g => g.id === id);
     if (!group) return;
     await updateGroup(id, { collapsed: group.collapsed ? 0 : 1 });
+  };
+
+  const handleExportProject = async () => {
+    try {
+      const res = await fetch(`${API_URL}/project/export`);
+      if (!res.ok) throw new Error('Error exporting project');
+      const data = await res.json();
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `proyecto-roadmap-${format(new Date(), 'yyyy-MM-dd-HH-mm')}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      alert('Error al exportar el proyecto');
+    }
+  };
+
+  const handleImportProject = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = async (evt) => {
+      try {
+        const data = JSON.parse(evt.target?.result as string);
+        const res = await fetch(`${API_URL}/project/import`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(data),
+        });
+        if (!res.ok) throw new Error('Error importing project');
+        await fetchTasks();
+        await fetchGroups();
+        alert('Proyecto importado con éxito');
+      } catch (err) {
+        console.error(err);
+        alert('Archivo de proyecto inválido o error al importar');
+      }
+    };
+    reader.readAsText(file);
+    if (e.target) e.target.value = '';
+  };
+
+  const handleClearProject = async () => {
+    if (!confirm('¿Estás seguro de que deseas limpiar todo el proyecto? Se borrarán todas las tareas, grupos y archivos adjuntos.')) return;
+    try {
+      const res = await fetch(`${API_URL}/project/clear`, {
+        method: 'POST',
+      });
+      if (!res.ok) throw new Error('Error resetting project');
+      await fetchTasks();
+      await fetchGroups();
+      alert('Proyecto limpiado con éxito');
+    } catch (err) {
+      console.error(err);
+      alert('Error al limpiar el proyecto');
+    }
+  };
+
+  const handleSidebarResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    const startWidth = sidebarWidth;
+    const handleMouseMove = (moveEvent: MouseEvent) => {
+      const newWidth = Math.max(120, Math.min(450, startWidth + (moveEvent.clientX - startX)));
+      setSidebarWidth(newWidth);
+      localStorage.setItem('roadmapper-sidebar-width', String(newWidth));
+    };
+    const handleMouseUp = () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
   };
 
   const deleteTask = async (id: number) => {
@@ -727,7 +820,7 @@ export default function App() {
 
     if (arrows.length === 0) return null;
     return (
-      <svg style={{ position: 'absolute', top: 0, left: SIDEBAR_W, width: numDays * dayWidth, height: totalRowsHeight, pointerEvents: 'none', zIndex: 5 }}>
+      <svg style={{ position: 'absolute', top: 0, left: sidebarWidth, width: numDays * dayWidth, height: totalRowsHeight, pointerEvents: 'none', zIndex: 5 }}>
         <defs>
           {tasks.filter(t => t.dependencies && t.dependencies.length > 0).map(task => (
             <marker key={`marker-${task.id}`} id={`arrowhead-${task.id}`} markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
@@ -875,8 +968,6 @@ export default function App() {
   const sidebarDragHighlight = (groupId: number | null) =>
     sidebarDragOverGroupId === groupId && sidebarDragTaskId !== null;
 
-  const SIDEBAR_W = 192;
-
   return (
     <div className="h-screen flex flex-col" style={{ backgroundColor: tBg, color: textPrimary, transition: 'background-color 0.3s ease, color 0.3s ease' }}>
       <input
@@ -887,15 +978,38 @@ export default function App() {
         accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.zip,.rar,.glb,.gltf,.fbx,.obj,.stl,.3ds,.dae,.off,.ply,.wrl,.3mf"
         onChange={handleFileChange}
       />
+      <input
+        type="file"
+        ref={projectFileInputRef}
+        className="hidden"
+        accept=".json"
+        onChange={handleImportProject}
+      />
 
       <div className="flex items-center justify-between px-4 py-2 border-b" style={{ borderColor, backgroundColor: cardBg }}>
         <div className="flex items-center gap-2">
-          <button
-            className="px-3 py-1 text-xs rounded hover:opacity-80 transition-colors flex items-center gap-1 font-medium"
-            style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0', color: textPrimary }}
-          >
-            <TbFolder size={14} /> Proyecto
-          </button>
+          <div ref={projectDropdownRef} className="relative">
+            <button
+              className="px-3 py-1 text-xs rounded hover:opacity-80 transition-colors flex items-center gap-1 font-medium"
+              style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0', color: textPrimary }}
+              onClick={() => setShowProjectDropdown(!showProjectDropdown)}
+            >
+              <TbFolder size={14} /> Proyecto ▾
+            </button>
+            {showProjectDropdown && (
+              <div className="absolute left-0 top-full mt-1 z-50 border rounded shadow-lg" style={{ backgroundColor: cardBg, borderColor, minWidth: 170 }}>
+                <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2 border-b" style={{ color: textPrimary, borderColor }} onClick={() => { setShowProjectDropdown(false); handleClearProject(); }}>
+                  <TbFileText size={14} /> Nuevo proyecto
+                </button>
+                <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={() => { setShowProjectDropdown(false); projectFileInputRef.current?.click(); }}>
+                  <TbFolder size={14} /> Importar proyecto
+                </button>
+                <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={() => { setShowProjectDropdown(false); handleExportProject(); }}>
+                  <TbDownload size={14} /> Exportar proyecto
+                </button>
+              </div>
+            )}
+          </div>
           <div ref={addDropdownRef} className="relative">
             <button
               className="px-3 py-1 text-xs rounded hover:opacity-80 transition-colors flex items-center gap-1 font-medium"
@@ -984,9 +1098,14 @@ export default function App() {
 
             <div className="flex border-b sticky top-0 z-20" style={{ borderColor, backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
               <div
-                className="flex-shrink-0 border-r sticky left-0"
-                style={{ width: SIDEBAR_W, borderColor, backgroundColor: subtleBg, zIndex: 30 }}
-              />
+                className="flex-shrink-0 border-r sticky left-0 relative"
+                style={{ width: sidebarWidth, borderColor, backgroundColor: subtleBg, zIndex: 30 }}
+              >
+                <div
+                  className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-blue-500/30 active:bg-blue-500/50 z-30 transition-colors"
+                  onMouseDown={handleSidebarResizeStart}
+                />
+              </div>
               {weeks.map((week, wi) => (
                 <div key={wi} className="flex" style={{ width: week.days.length * dayWidth }}>
                   <div className="text-[10px] font-medium px-1 py-1" style={{ width: week.days.length * dayWidth, color: textMuted }}>
@@ -997,7 +1116,15 @@ export default function App() {
             </div>
 
             <div className="flex border-b sticky top-0 z-10" style={{ borderColor, backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
-              <div className="flex-shrink-0 border-r sticky left-0" style={{ width: SIDEBAR_W, borderColor, backgroundColor: subtleBg, zIndex: 25 }} />
+              <div
+                className="flex-shrink-0 border-r sticky left-0 relative"
+                style={{ width: sidebarWidth, borderColor, backgroundColor: subtleBg, zIndex: 25 }}
+              >
+                <div
+                  className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-blue-500/30 active:bg-blue-500/50 z-30 transition-colors"
+                  onMouseDown={handleSidebarResizeStart}
+                />
+              </div>
               {calendarDays.map((day, i) => {
                 const dayOfWeek = day.getDay();
                 const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
@@ -1041,7 +1168,7 @@ export default function App() {
                     >
                       <div
                         className="flex-shrink-0 border-r flex items-center px-2 gap-1 sticky left-0 group"
-                        style={{ width: SIDEBAR_W, borderColor, borderLeft: `3px solid ${group.color}`, backgroundColor: subtleBg, zIndex: 25 }}
+                        style={{ width: sidebarWidth, borderColor, borderLeft: `3px solid ${group.color}`, backgroundColor: subtleBg, zIndex: 25 }}
                         onContextMenu={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
@@ -1119,7 +1246,7 @@ export default function App() {
                     <div key="ungrouped" className="flex border-b" style={{ height: GROUP_HEADER_HEIGHT, borderBottom: `1px solid ${borderColor}` }}>
                       <div
                         className="flex-shrink-0 border-r flex items-center px-2 sticky left-0"
-                        style={{ width: SIDEBAR_W, borderColor, backgroundColor: cardBg, zIndex: 25 }}
+                        style={{ width: sidebarWidth, borderColor, backgroundColor: cardBg, zIndex: 25 }}
                         onDragOver={(e) => handleGroupDragOver(e, null)}
                         onDrop={(e) => handleGroupDrop(e, null)}
                         onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
@@ -1164,7 +1291,7 @@ export default function App() {
                     <div
                       className="flex-shrink-0 border-r flex items-center px-2 gap-1 cursor-pointer sticky left-0"
                       style={{
-                        width: SIDEBAR_W,
+                        width: sidebarWidth,
                         borderColor,
                         backgroundColor: sidebarDragHighlight(row.groupId ?? null) ? hexToRgba(groupColor, 0.25) : groupBg,
                         borderLeft: `3px solid ${groupColor}`,
@@ -1266,7 +1393,7 @@ export default function App() {
               const todayIndex = differenceInDays(new Date(), viewStart);
               if (todayIndex < 0 || todayIndex >= numDays) return null;
               return (
-                <div className="absolute top-0 bottom-0 pointer-events-none" style={{ left: SIDEBAR_W + todayIndex * dayWidth + dayWidth / 2, width: 2, backgroundColor: '#f44336', zIndex: 4 }}>
+                <div className="absolute top-0 bottom-0 pointer-events-none" style={{ left: sidebarWidth + todayIndex * dayWidth + dayWidth / 2, width: 2, backgroundColor: '#f44336', zIndex: 4 }}>
                   <div className="absolute -top-0 left-1/2 -translate-x-1/2 text-[9px] font-bold text-white px-1 py-0.5 rounded whitespace-nowrap" style={{ backgroundColor: '#f44336' }}>
                     Hoy
                   </div>
