@@ -883,6 +883,32 @@ export default function App() {
       <div className="flex items-center justify-between px-4 py-2 border-b" style={{ borderColor, backgroundColor: cardBg }}>
         <div className="flex items-center gap-2">
           <button
+            className="px-3 py-1 text-xs rounded hover:opacity-80 transition-colors flex items-center gap-1 font-medium"
+            style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0', color: textPrimary }}
+          >
+            <TbFolder size={14} /> Proyecto
+          </button>
+          <div ref={addDropdownRef} className="relative">
+            <button
+              className="px-3 py-1 text-xs rounded hover:opacity-80 transition-colors flex items-center gap-1 font-medium"
+              style={{ backgroundColor: '#4caf50', color: '#fff' }}
+              onClick={() => setShowAddDropdown(!showAddDropdown)}
+            >
+              + Agregar
+            </button>
+            {showAddDropdown && (
+              <div className="absolute left-0 top-full mt-1 z-50 border rounded shadow-lg" style={{ backgroundColor: cardBg, borderColor, minWidth: 160 }}>
+                <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={(e) => { e.stopPropagation(); addTask(); setShowAddDropdown(false); }}>
+                  <TbFileText size={14} /> Agregar tarea
+                </button>
+                <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={(e) => { e.stopPropagation(); addGroup(); setShowAddDropdown(false); }}>
+                  <TbFolder size={14} /> Agregar grupo
+                </button>
+              </div>
+            )}
+          </div>
+          <div className="w-px h-4 mx-1" style={{ backgroundColor: borderColor }} />
+          <button
             onClick={() => setDayWidth(Math.max(DAY_WIDTH_MIN, dayWidth - 15))}
             className="px-2 py-1 text-xs rounded hover:opacity-80 transition-colors"
             style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0', color: textPrimary }}
@@ -950,23 +976,9 @@ export default function App() {
 
             <div className="flex border-b sticky top-0 z-20" style={{ borderColor, backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
               <div
-                ref={addDropdownRef}
-                className="relative flex-shrink-0 flex items-center justify-center border-r text-[11px] font-medium hover:opacity-80 transition-colors cursor-pointer sticky left-0"
-                style={{ width: SIDEBAR_W, borderColor, color: '#4caf50', backgroundColor: subtleBg, zIndex: 30 }}
-                onClick={() => setShowAddDropdown(!showAddDropdown)}
-              >
-                Agregar ▾
-                {showAddDropdown && (
-                  <div className="absolute left-0 top-full z-50 border border-t-0" style={{ backgroundColor: cardBg, borderColor }}>
-                    <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={(e) => { e.stopPropagation(); addTask(); setShowAddDropdown(false); }}>
-                      <TbFileText size={14} /> Agregar tarea
-                    </button>
-                    <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={(e) => { e.stopPropagation(); addGroup(); setShowAddDropdown(false); }}>
-                      <TbFolder size={14} /> Agregar grupo
-                    </button>
-                  </div>
-                )}
-              </div>
+                className="flex-shrink-0 border-r sticky left-0"
+                style={{ width: SIDEBAR_W, borderColor, backgroundColor: subtleBg, zIndex: 30 }}
+              />
               {weeks.map((week, wi) => (
                 <div key={wi} className="flex" style={{ width: week.days.length * dayWidth }}>
                   <div className="text-[10px] font-medium px-1 py-1" style={{ width: week.days.length * dayWidth, color: textMuted }}>
