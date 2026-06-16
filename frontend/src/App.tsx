@@ -48,7 +48,7 @@ function getDependencyErrorMessage(task: Task, allTasks: Task[]): string | null 
     if (!depTask) continue;
     const taskStart = parseISO(task.start_date);
     const depEnd = parseISO(depTask.end_date);
-    if (taskStart < depEnd) {
+    if (differenceInDays(taskStart, depEnd) < 0) {
       return `Inicia antes de finalizar "${depTask.name}"`;
     }
   }
@@ -85,7 +85,11 @@ export default function App() {
   });
   const [dayWidth, setDayWidth] = useState(DAY_WIDTH_DEFAULT);
   const [dragging, setDragging] = useState<DragState | null>(null);
+  const dragDeltaRef = useRef(0);
   const [dragDelta, setDragDelta] = useState(0);
+  const tasksRef = useRef<Task[]>([]);
+  const dayWidthRef = useRef(DAY_WIDTH_DEFAULT);
+  const linkModeRef = useRef<{ fromTaskId: number } | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
   const calendarContainerRef = useRef<HTMLDivElement>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
@@ -116,6 +120,10 @@ export default function App() {
     setTheme(next);
     localStorage.setItem('roadmapper-theme', next);
   };
+
+  useEffect(() => { tasksRef.current = tasks; }, [tasks]);
+  useEffect(() => { dayWidthRef.current = dayWidth; }, [dayWidth]);
+  useEffect(() => { linkModeRef.current = linkMode; }, [linkMode]);
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -197,7 +205,7 @@ export default function App() {
       path: '/socket.io',
     });
 
-    socket.on('connect', () => {});
+    socket.on('connect', () => { });
 
     socket.on('task-created', (task: Task) => {
       setTasks((prev) => {
@@ -481,19 +489,25 @@ export default function App() {
 
     const handleMouseMove = (e: MouseEvent) => {
       const delta = e.clientX - dragging.startX;
+      dragDeltaRef.current = delta;
       setDragDelta(delta);
     };
 
     const handleMouseUp = () => {
+      const currentDelta = dragDeltaRef.current;
+      const currentDayWidth = dayWidthRef.current;
+      const currentTasks = tasksRef.current;
+      const currentLinkMode = linkModeRef.current;
+
       if (dragStartRef.current) {
         const elapsed = Date.now() - dragStartRef.current.time;
         const button = dragStartRef.current.button;
         dragStartRef.current = null;
 
-        if (elapsed < 200 && Math.abs(dragDelta) < 3 && button === 0) {
-          if (linkMode) {
-            if (linkMode.fromTaskId !== dragging.taskId) {
-              addDependency(dragging.taskId, linkMode.fromTaskId);
+        if (elapsed < 200 && Math.abs(currentDelta) < 3 && button === 0) {
+          if (currentLinkMode) {
+            if (currentLinkMode.fromTaskId !== dragging.taskId) {
+              addDependency(dragging.taskId, currentLinkMode.fromTaskId);
             }
             setLinkMode(null);
           } else {
@@ -502,25 +516,26 @@ export default function App() {
         }
       }
 
-      const daysDelta = Math.round(dragDelta / dayWidth);
-      if (daysDelta !== 0 && dragging) {
-        const task = tasks.find((t) => t.id === dragging.taskId);
-        if (!task) return;
+      const daysDelta = Math.round(currentDelta / currentDayWidth);
+      if (daysDelta !== 0) {
+        const task = currentTasks.find((t) => t.id === dragging.taskId);
+        if (task) {
+          let newStart = dragging.origStart;
+          let newEnd = dragging.origEnd;
 
-        let newStart = dragging.origStart;
-        let newEnd = dragging.origEnd;
+          if (dragging.type === 'move') {
+            newStart = format(addDays(parseISO(dragging.origStart), daysDelta), 'yyyy-MM-dd');
+            newEnd = format(addDays(parseISO(dragging.origEnd), daysDelta), 'yyyy-MM-dd');
+          } else if (dragging.type === 'resize-left') {
+            newStart = format(addDays(parseISO(dragging.origStart), daysDelta), 'yyyy-MM-dd');
+          } else if (dragging.type === 'resize-right') {
+            newEnd = format(addDays(parseISO(dragging.origEnd), daysDelta), 'yyyy-MM-dd');
+          }
 
-        if (dragging.type === 'move') {
-          newStart = format(addDays(parseISO(dragging.origStart), daysDelta), 'yyyy-MM-dd');
-          newEnd = format(addDays(parseISO(dragging.origEnd), daysDelta), 'yyyy-MM-dd');
-        } else if (dragging.type === 'resize-left') {
-          newStart = format(addDays(parseISO(dragging.origStart), daysDelta), 'yyyy-MM-dd');
-        } else if (dragging.type === 'resize-right') {
-          newEnd = format(addDays(parseISO(dragging.origEnd), daysDelta), 'yyyy-MM-dd');
+          updateTask(task.id, { start_date: newStart, end_date: newEnd });
         }
-
-        updateTask(task.id, { start_date: newStart, end_date: newEnd });
       }
+      dragDeltaRef.current = 0;
       setDragging(null);
       setDragDelta(0);
     };
@@ -531,7 +546,7 @@ export default function App() {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [dragging, dragDelta, dayWidth, tasks, linkMode]);
+  }, [dragging]);
 
   const handleContextMenu = (e: React.MouseEvent, taskId: number) => {
     e.preventDefault();
@@ -676,13 +691,13 @@ export default function App() {
           const collapsedRect = getTaskGroupRect(depTask);
           if (collapsedRect) {
             const depY = getTaskY(depId);
-            const fromX = collapsedRect.left + collapsedRect.width;
-            const fromY = depY + ROW_HEIGHT / 2;
-            const toX = taskRect.left;
-            const toY = taskY + ROW_HEIGHT / 2;
+            const fromX = collapsedRect.left + collapsedRect.width - 2;
+            const fromY = depY + 8 + (ROW_HEIGHT - 16) / 2;
+            const toX = taskRect.left + 2;
+            const toY = taskY + 8 + (ROW_HEIGHT - 16) / 2;
             const midX = fromX + (toX - fromX) / 2;
             arrows.push(
-              <path key={`arrow-${task.id}-${depId}`} d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`} stroke={darkenColor(task.color || '#4caf50', 0.6)} strokeWidth={2} fill="none" />
+              <path key={`arrow-${task.id}-${depId}`} d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`} stroke={darkenColor(task.color || '#4caf50', 0.6)} strokeWidth={2} fill="none" markerEnd={`url(#arrowhead-${task.id})`} />
             );
           }
           return;
@@ -690,21 +705,21 @@ export default function App() {
         const depTask = tasks.find(t => t.id === depId);
         if (!depTask) return;
         const depY = getTaskY(depId);
-        const fromX = depRect.left + depRect.width;
-        const fromY = depY + ROW_HEIGHT / 2;
-        const toX = taskRect.left;
-        const toY = taskY + ROW_HEIGHT / 2;
+        const fromX = depRect.left + depRect.width - 2;
+        const fromY = depY + 8 + (ROW_HEIGHT - 16) / 2;
+        const toX = taskRect.left + 2;
+        const toY = taskY + 8 + (ROW_HEIGHT - 16) / 2;
         const midX = fromX + (toX - fromX) / 2;
 
         arrows.push(
-          <path key={`arrow-${task.id}-${depId}`} d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`} stroke={darkenColor(task.color || '#4caf50', 0.6)} strokeWidth={2} fill="none" />
+          <path key={`arrow-${task.id}-${depId}`} d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`} stroke={darkenColor(task.color || '#4caf50', 0.6)} strokeWidth={2} fill="none" markerEnd={`url(#arrowhead-${task.id})`} />
         );
       });
     });
 
     if (arrows.length === 0) return null;
     return (
-      <svg style={{ position: 'absolute', top: 46, left: SIDEBAR_W, width: numDays * dayWidth, height: totalRowsHeight, pointerEvents: 'none', zIndex: 5 }}>
+      <svg style={{ position: 'absolute', top: 0, left: SIDEBAR_W, width: numDays * dayWidth, height: totalRowsHeight, pointerEvents: 'none', zIndex: 5 }}>
         <defs>
           {tasks.filter(t => t.dependencies && t.dependencies.length > 0).map(task => (
             <marker key={`marker-${task.id}`} id={`arrowhead-${task.id}`} markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
@@ -902,7 +917,7 @@ export default function App() {
             <TbArrowForwardUp size={14} />
           </button>
         </div>
-        <h1 className="text-base font-semibold tracking-tight">Roadmapper</h1>
+        <h1 className="text-base font-semibold tracking-tight">Pipeline de Actividad Semanal</h1>
         <div className="flex items-center gap-2">
           {linkMode && (
             <span className="text-[10px] text-orange-600 bg-orange-100 px-2 py-1 rounded">
@@ -943,10 +958,10 @@ export default function App() {
                 Agregar ▾
                 {showAddDropdown && (
                   <div className="absolute left-0 top-full z-50 border border-t-0" style={{ backgroundColor: cardBg, borderColor }}>
-                    <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={() => { addTask(); setShowAddDropdown(false); }}>
+                    <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={(e) => { e.stopPropagation(); addTask(); setShowAddDropdown(false); }}>
                       <TbFileText size={14} /> Agregar tarea
                     </button>
-                    <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={() => { addGroup(); setShowAddDropdown(false); }}>
+                    <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={(e) => { e.stopPropagation(); addGroup(); setShowAddDropdown(false); }}>
                       <TbFolder size={14} /> Agregar grupo
                     </button>
                   </div>
@@ -984,204 +999,206 @@ export default function App() {
               })}
             </div>
 
-            {sidebarRows.map((row, rowIdx) => {
-              if (row.type === 'group-header') {
-                const group = groups.find(g => g.id === row.groupId);
-                if (!group) return null;
-                const collapsedGroupTasks = group.collapsed ? tasks.filter(t => t.group_id === group.id) : [];
+            <div className="relative">
+              {sidebarRows.map((row) => {
+                if (row.type === 'group-header') {
+                  const group = groups.find(g => g.id === row.groupId);
+                  if (!group) return null;
+                  const collapsedGroupTasks = group.collapsed ? tasks.filter(t => t.group_id === group.id) : [];
+
+                  return (
+                    <div
+                      key={`group-row-${group.id}`}
+                      className="flex border-b"
+                      style={{
+                        height: GROUP_HEADER_HEIGHT,
+                        borderBottom: `1px solid ${borderColor}`,
+                        backgroundColor: sidebarDragHighlight(group.id) ? hexToRgba(group.color, 0.25) : subtleBg,
+                      }}
+                      onDragOver={(e) => handleGroupDragOver(e, group.id)}
+                      onDrop={(e) => handleGroupDrop(e, group.id)}
+                      onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
+                    >
+                      <div
+                        className="flex-shrink-0 border-r flex items-center px-2 gap-1 sticky left-0"
+                        style={{ width: SIDEBAR_W, borderColor, borderLeft: `3px solid ${group.color}`, backgroundColor: subtleBg, zIndex: 25 }}
+                      >
+                        <button onClick={() => toggleGroupCollapse(group.id)} style={{ color: textMuted }}>
+                          {group.collapsed ? <TbChevronRight size={9} /> : <TbChevronDown size={9} />}
+                        </button>
+                        <span className="flex-1 text-[9px] font-semibold truncate" style={{ color: textPrimary }}>
+                          {group.name}
+                        </span>
+                        {group.collapsed && <span className="text-[8px]" style={{ color: textMuted }}>{collapsedGroupTasks.length}</span>}
+                        <button onClick={() => deleteGroup(group.id)} className="text-gray-300 hover:text-red-500 text-[9px] font-bold">×</button>
+                      </div>
+                      <div className="flex-1 relative">
+                        {group.collapsed && collapsedGroupTasks.map(ct => {
+                          const sIdx = getDayIndex(ct.start_date, viewStart);
+                          const eIdx = getDayIndex(ct.end_date, viewStart);
+                          const dur = eIdx - sIdx;
+                          const ctLeft = sIdx * dayWidth;
+                          const ctWidth = Math.max(dur * dayWidth, dayWidth);
+                          return (
+                            <div
+                              key={`collapsed-bar-${ct.id}`}
+                              className="absolute rounded-[2px]"
+                              style={{ left: ctLeft + 2, width: ctWidth - 4, top: GROUP_HEADER_HEIGHT - 12, height: 8, backgroundColor: ct.color || '#4caf50', opacity: 0.7 }}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
+                  );
+                }
+
+                if (row.type === 'ungrouped-header') {
+                  return (
+                    <div key="ungrouped" className="flex border-b" style={{ height: GROUP_HEADER_HEIGHT, borderBottom: `1px solid ${borderColor}` }}>
+                      <div
+                        className="flex-shrink-0 border-r flex items-center px-2 sticky left-0"
+                        style={{ width: SIDEBAR_W, borderColor, backgroundColor: cardBg, zIndex: 25 }}
+                        onDragOver={(e) => handleGroupDragOver(e, null)}
+                        onDrop={(e) => handleGroupDrop(e, null)}
+                        onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
+                      >
+                        <span className="text-[9px] font-semibold" style={{ color: sidebarDragHighlight(null) ? '#4caf50' : textMuted }}>Sin grupo</span>
+                      </div>
+                      <div className="flex-1" />
+                    </div>
+                  );
+                }
+
+                const task = row.task!;
+                const startIdx = getDayIndex(task.start_date, viewStart);
+                const endIdx = getDayIndex(task.end_date, viewStart);
+                const duration = endIdx - startIdx;
+                let taskLeft = startIdx * dayWidth;
+                let taskWidth = Math.max(duration * dayWidth, dayWidth);
+
+                if (dragging && dragging.taskId === task.id) {
+                  const daysDelta = Math.round(dragDelta / dayWidth);
+                  if (dragging.type === 'move') {
+                    taskLeft = startIdx * dayWidth + daysDelta * dayWidth;
+                  } else if (dragging.type === 'resize-left') {
+                    taskLeft = startIdx * dayWidth + daysDelta * dayWidth;
+                    taskWidth = Math.max(taskWidth - daysDelta * dayWidth, dayWidth);
+                  } else if (dragging.type === 'resize-right') {
+                    taskWidth = Math.max(taskWidth + daysDelta * dayWidth, dayWidth);
+                  }
+                }
+
+                const bgColor = task.color || '#4caf50';
+                const isLinkTarget = linkMode && linkMode.fromTaskId !== task.id;
+                const isInvalid = hasInvalidDependencies(task);
+                const errorMsg = isInvalid ? getDependencyErrorMessageForTask(task) : null;
+                const isHovered = hoveredTask === task.id;
+                const group = row.groupId ? groups.find(g => g.id === row.groupId) : null;
+                const groupColor = group?.color || '#888';
+                const groupBg = cardBg;
 
                 return (
-                  <div
-                    key={`group-row-${group.id}`}
-                    className="flex border-b"
-                    style={{
-                      height: GROUP_HEADER_HEIGHT,
-                      borderBottom: `1px solid ${borderColor}`,
-                      backgroundColor: sidebarDragHighlight(group.id) ? hexToRgba(group.color, 0.25) : subtleBg,
-                    }}
-                    onDragOver={(e) => handleGroupDragOver(e, group.id)}
-                    onDrop={(e) => handleGroupDrop(e, group.id)}
-                    onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
-                  >
+                  <div key={task.id} className="flex border-b" style={{ height: ROW_HEIGHT, borderBottom: `1px solid ${borderColor}` }}>
                     <div
-                      className="flex-shrink-0 border-r flex items-center px-2 gap-1 sticky left-0"
-                      style={{ width: SIDEBAR_W, borderColor, borderLeft: `3px solid ${group.color}`, backgroundColor: subtleBg, zIndex: 25 }}
+                      className="flex-shrink-0 border-r flex items-center px-2 gap-1 cursor-pointer sticky left-0"
+                      style={{
+                        width: SIDEBAR_W,
+                        borderColor,
+                        backgroundColor: sidebarDragHighlight(row.groupId ?? null) ? hexToRgba(groupColor, 0.25) : groupBg,
+                        borderLeft: `3px solid ${groupColor}`,
+                        transition: 'background-color 0.15s ease, opacity 0.15s ease',
+                        zIndex: 20,
+                      }}
+                      draggable
+                      onDragStart={(e) => handleSidebarDragStart(e, task.id)}
+                      onDragEnd={handleSidebarDragEnd}
+                      onContextMenu={(e) => handleContextMenu(e, task.id)}
                     >
-                      <button onClick={() => toggleGroupCollapse(group.id)} style={{ color: textMuted }}>
-                        {group.collapsed ? <TbChevronRight size={9} /> : <TbChevronDown size={9} />}
-                      </button>
-                      <span className="flex-1 text-[9px] font-semibold truncate" style={{ color: textPrimary }}>
-                        {group.name}
+                      <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: bgColor }} />
+                      <span className="flex-1 text-[11px] font-medium truncate" style={{ color: textPrimary }}>
+                        {task.name}
                       </span>
-                      {group.collapsed && <span className="text-[8px]" style={{ color: textMuted }}>{collapsedGroupTasks.length}</span>}
-                      <button onClick={() => deleteGroup(group.id)} className="text-gray-300 hover:text-red-500 text-[9px] font-bold">×</button>
+                      <span className="text-[9px] flex-shrink-0" style={{ color: textMuted }}>{task.estimate || ''}</span>
+                      <button onClick={() => deleteTask(task.id)} className="text-gray-300 hover:text-red-500 text-[9px] font-bold flex-shrink-0">×</button>
                     </div>
-                    <div className="flex-1 relative" ref={calendarContainerRef}>
-                      {group.collapsed && collapsedGroupTasks.map(ct => {
-                        const sIdx = getDayIndex(ct.start_date, viewStart);
-                        const eIdx = getDayIndex(ct.end_date, viewStart);
-                        const dur = eIdx - sIdx;
-                        const ctLeft = sIdx * dayWidth;
-                        const ctWidth = Math.max(dur * dayWidth, dayWidth);
+
+                    <div className="flex-1 relative">
+                      {calendarDays.map((day, i) => {
+                        const dayOfWeek = day.getDay();
+                        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
                         return (
                           <div
-                            key={`collapsed-bar-${ct.id}`}
-                            className="absolute rounded-[2px]"
-                            style={{ left: ctLeft + 2, width: ctWidth - 4, top: GROUP_HEADER_HEIGHT - 12, height: 8, backgroundColor: ct.color || '#4caf50', opacity: 0.7 }}
+                            key={i}
+                            className="absolute top-0 h-full border-r"
+                            style={{
+                              left: i * dayWidth,
+                              width: dayWidth,
+                              borderColor,
+                              backgroundColor: isWeekend ? (isDark ? '#252525' : '#f0f0f0') : i % 2 === 0 ? (isDark ? '#1e1e1e' : '#ffffff') : subtleBg,
+                            }}
                           />
                         );
                       })}
-                    </div>
-                  </div>
-                );
-              }
-
-              if (row.type === 'ungrouped-header') {
-                return (
-                  <div key="ungrouped" className="flex border-b" style={{ height: GROUP_HEADER_HEIGHT, borderBottom: `1px solid ${borderColor}` }}>
-                    <div
-                      className="flex-shrink-0 border-r flex items-center px-2 sticky left-0"
-                      style={{ width: SIDEBAR_W, borderColor, backgroundColor: cardBg, zIndex: 25 }}
-                      onDragOver={(e) => handleGroupDragOver(e, null)}
-                      onDrop={(e) => handleGroupDrop(e, null)}
-                      onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
-                    >
-                      <span className="text-[9px] font-semibold" style={{ color: sidebarDragHighlight(null) ? '#4caf50' : textMuted }}>Sin grupo</span>
-                    </div>
-                    <div className="flex-1" />
-                  </div>
-                );
-              }
-
-              const task = row.task!;
-              const startIdx = getDayIndex(task.start_date, viewStart);
-              const endIdx = getDayIndex(task.end_date, viewStart);
-              const duration = endIdx - startIdx;
-              let taskLeft = startIdx * dayWidth;
-              let taskWidth = Math.max(duration * dayWidth, dayWidth);
-
-              if (dragging && dragging.taskId === task.id) {
-                const daysDelta = Math.round(dragDelta / dayWidth);
-                if (dragging.type === 'move') {
-                  taskLeft = startIdx * dayWidth + daysDelta * dayWidth;
-                } else if (dragging.type === 'resize-left') {
-                  taskLeft = startIdx * dayWidth + daysDelta * dayWidth;
-                  taskWidth = Math.max(taskWidth - daysDelta * dayWidth, dayWidth);
-                } else if (dragging.type === 'resize-right') {
-                  taskWidth = Math.max(taskWidth + daysDelta * dayWidth, dayWidth);
-                }
-              }
-
-              const bgColor = task.color || '#4caf50';
-              const isLinkTarget = linkMode && linkMode.fromTaskId !== task.id;
-              const isInvalid = hasInvalidDependencies(task);
-              const errorMsg = isInvalid ? getDependencyErrorMessageForTask(task) : null;
-              const isHovered = hoveredTask === task.id;
-              const group = row.groupId ? groups.find(g => g.id === row.groupId) : null;
-              const groupColor = group?.color || '#888';
-              const groupBg = cardBg;
-
-              return (
-                <div key={task.id} className="flex border-b" style={{ height: ROW_HEIGHT, borderBottom: `1px solid ${borderColor}` }}>
-                  <div
-                    className="flex-shrink-0 border-r flex items-center px-2 gap-1 cursor-pointer sticky left-0"
-                    style={{
-                      width: SIDEBAR_W,
-                      borderColor,
-                      backgroundColor: sidebarDragHighlight(row.groupId ?? null) ? hexToRgba(groupColor, 0.25) : groupBg,
-                      borderLeft: `3px solid ${groupColor}`,
-                      transition: 'background-color 0.15s ease, opacity 0.15s ease',
-                      zIndex: 20,
-                    }}
-                    draggable
-                    onDragStart={(e) => handleSidebarDragStart(e, task.id)}
-                    onDragEnd={handleSidebarDragEnd}
-                    onContextMenu={(e) => handleContextMenu(e, task.id)}
-                  >
-                    <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: bgColor }} />
-                    <span className="flex-1 text-[11px] font-medium truncate" style={{ color: textPrimary }}>
-                      {task.name}
-                    </span>
-                    <span className="text-[9px] flex-shrink-0" style={{ color: textMuted }}>{task.estimate || ''}</span>
-                    <button onClick={() => deleteTask(task.id)} className="text-gray-300 hover:text-red-500 text-[9px] font-bold flex-shrink-0">×</button>
-                  </div>
-
-                  <div className="flex-1 relative" ref={calendarContainerRef}>
-                    {calendarDays.map((day, i) => {
-                      const dayOfWeek = day.getDay();
-                      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-                      return (
-                        <div
-                          key={i}
-                          className="absolute top-0 h-full border-r"
-                          style={{
-                            left: i * dayWidth,
-                            width: dayWidth,
-                            borderColor,
-                            backgroundColor: isWeekend ? (isDark ? '#252525' : '#f0f0f0') : i % 2 === 0 ? (isDark ? '#1e1e1e' : '#ffffff') : subtleBg,
-                          }}
-                        />
-                      );
-                    })}
-                    <div
-                      className="absolute rounded-[3px] select-none"
-                      style={{
-                        left: taskLeft + 2,
-                        width: taskWidth - 4,
-                        top: 8,
-                        height: ROW_HEIGHT - 16,
-                        backgroundColor: bgColor,
-                        border: isLinkTarget ? '2px dashed #ff9800' : isInvalid ? '2px solid #f44336' : `1px solid ${darkenColor(bgColor, 0.7)}`,
-                        cursor: dragging && dragging.taskId === task.id ? 'grabbing' : linkMode ? 'pointer' : 'grab',
-                        zIndex: dragging && dragging.taskId === task.id ? 10 : 2,
-                        opacity: linkMode && !isLinkTarget ? 0.6 : 1,
-                        boxShadow: isInvalid ? '0 0 8px rgba(244, 67, 54, 0.6)' : isHovered ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
-                        transform: isHovered && !(dragging && dragging.taskId === task.id) ? 'scaleY(1.08)' : 'scaleY(1)',
-                        transition: 'transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease',
-                      }}
-                      onMouseDown={(e) => {
-                        if (linkMode) {
-                          e.stopPropagation();
-                          e.preventDefault();
-                          if (linkMode.fromTaskId !== task.id) {
-                            addDependency(task.id, linkMode.fromTaskId);
-                            setLinkMode(null);
+                      <div
+                        className="absolute rounded-[3px] select-none"
+                        style={{
+                          left: taskLeft + 2,
+                          width: taskWidth - 4,
+                          top: 8,
+                          height: ROW_HEIGHT - 16,
+                          backgroundColor: bgColor,
+                          border: isLinkTarget ? '2px dashed #ff9800' : isInvalid ? '2px solid #f44336' : `1px solid ${darkenColor(bgColor, 0.7)}`,
+                          cursor: dragging && dragging.taskId === task.id ? 'grabbing' : linkMode ? 'pointer' : 'grab',
+                          zIndex: dragging && dragging.taskId === task.id ? 10 : 2,
+                          opacity: linkMode && !isLinkTarget ? 0.6 : 1,
+                          boxShadow: isInvalid ? '0 0 8px rgba(244, 67, 54, 0.6)' : isHovered ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
+                          transform: isHovered && !(dragging && dragging.taskId === task.id) ? 'scaleY(1.08)' : 'scaleY(1)',
+                          transition: 'transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease',
+                        }}
+                        onMouseDown={(e) => {
+                          if (linkMode) {
+                            e.stopPropagation();
+                            e.preventDefault();
+                            if (linkMode.fromTaskId !== task.id) {
+                              addDependency(task.id, linkMode.fromTaskId);
+                              setLinkMode(null);
+                            }
+                            return;
                           }
-                          return;
-                        }
-                        handleMouseDown(e, task.id, 'move', task.start_date, task.end_date);
-                      }}
-                      onMouseEnter={() => setHoveredTask(task.id)}
-                      onMouseLeave={() => setHoveredTask(null)}
-                      onContextMenu={(e) => handleContextMenu(e, task.id)}
-                    >
-                      <div className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none">
-                        <span className="text-[10px] font-bold text-white truncate px-1" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}>
-                          {task.name}
-                        </span>
+                          handleMouseDown(e, task.id, 'move', task.start_date, task.end_date);
+                        }}
+                        onMouseEnter={() => setHoveredTask(task.id)}
+                        onMouseLeave={() => setHoveredTask(null)}
+                        onContextMenu={(e) => handleContextMenu(e, task.id)}
+                      >
+                        <div className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none">
+                          <span className="text-[10px] font-bold text-white truncate px-1" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}>
+                            {task.name}
+                          </span>
+                        </div>
+                        {isInvalid && isHovered && (
+                          <div className="absolute z-20 px-2 py-1 rounded text-[10px] font-medium text-white whitespace-nowrap pointer-events-none"
+                            style={{ bottom: '100%', left: '50%', transform: 'translateX(-50%)', marginBottom: 4, backgroundColor: '#f44336' }}>
+                            <TbAlertTriangle size={10} className="inline mr-1" />{errorMsg}
+                          </div>
+                        )}
+                        {isInvalid && !isHovered && (
+                          <div className="absolute flex items-center justify-center" style={{ top: -4, right: -4, width: 14, height: 14, borderRadius: '50%', backgroundColor: '#f44336', zIndex: 11 }}>
+                            <TbAlertTriangle size={9} className="text-white" />
+                          </div>
+                        )}
+                        <div className="absolute left-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-l-[3px]"
+                          onMouseDown={(e) => { if (!linkMode) handleMouseDown(e, task.id, 'resize-left', task.start_date, task.end_date); }} />
+                        <div className="absolute right-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-r-[3px]"
+                          onMouseDown={(e) => { if (!linkMode) handleMouseDown(e, task.id, 'resize-right', task.start_date, task.end_date); }} />
                       </div>
-                      {isInvalid && isHovered && (
-                        <div className="absolute z-20 px-2 py-1 rounded text-[10px] font-medium text-white whitespace-nowrap pointer-events-none"
-                          style={{ bottom: '100%', left: '50%', transform: 'translateX(-50%)', marginBottom: 4, backgroundColor: '#f44336' }}>
-                          <TbAlertTriangle size={10} className="inline mr-1" />{errorMsg}
-                        </div>
-                      )}
-                      {isInvalid && !isHovered && (
-                        <div className="absolute flex items-center justify-center" style={{ top: -4, right: -4, width: 14, height: 14, borderRadius: '50%', backgroundColor: '#f44336', zIndex: 11 }}>
-                          <TbAlertTriangle size={9} className="text-white" />
-                        </div>
-                      )}
-                      <div className="absolute left-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-l-[3px]"
-                        onMouseDown={(e) => { if (!linkMode) handleMouseDown(e, task.id, 'resize-left', task.start_date, task.end_date); }} />
-                      <div className="absolute right-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-r-[3px]"
-                        onMouseDown={(e) => { if (!linkMode) handleMouseDown(e, task.id, 'resize-right', task.start_date, task.end_date); }} />
                     </div>
                   </div>
-                </div>
-              );
-            })}
+                );
+              })}
 
-            {renderArrows()}
+              {renderArrows()}
+            </div>
 
             {(() => {
               const todayIndex = differenceInDays(new Date(), viewStart);
