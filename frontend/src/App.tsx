@@ -366,6 +366,42 @@ export default function App() {
     }
   };
 
+  const handleExportExcel = () => {
+    try {
+      const headers = ['Grupo', 'Tarea', 'Fecha de Inicio', 'Fecha de Fin', 'Estimado', 'Estado', 'Notas'];
+      const rows = tasks.map(t => {
+        const groupName = groups.find(g => g.id === t.group_id)?.name || 'Sin grupo';
+        const cleanNotes = (t.notes || '').replace(/"/g, '""').replace(/\n/g, ' ');
+        return [
+          groupName,
+          t.name,
+          t.start_date,
+          t.end_date,
+          t.estimate || '',
+          t.status || '',
+          cleanNotes
+        ];
+      });
+      const csvContent = [
+        'sep=;',
+        headers.map(h => `"${h}"`).join(';'),
+        ...rows.map(row => row.map(val => `"${val}"`).join(';'))
+      ].join('\n');
+      const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `reporte-roadmap-${format(new Date(), 'yyyy-MM-dd-HH-mm')}.csv`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      console.error(err);
+      alert('Error al exportar a Excel');
+    }
+  };
+
   const handleImportProject = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
@@ -1006,6 +1042,9 @@ export default function App() {
                 </button>
                 <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={() => { setShowProjectDropdown(false); handleExportProject(); }}>
                   <TbDownload size={14} /> Exportar proyecto
+                </button>
+                <button className="w-full px-3 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2 border-t" style={{ color: textPrimary, borderColor }} onClick={() => { setShowProjectDropdown(false); handleExportExcel(); }}>
+                  <TbDownload size={14} /> Exportar a Excel
                 </button>
               </div>
             )}
