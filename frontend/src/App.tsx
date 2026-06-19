@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload, TbChevronDown, TbChevronRight, TbFolder, TbSun, TbMoon, TbAlertTriangle, TbSettings } from 'react-icons/tb';
+import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload, TbChevronDown, TbChevronLeft, TbChevronRight, TbFolder, TbSun, TbMoon, TbAlertTriangle, TbSettings } from 'react-icons/tb';
 import { Task, Attachment, TaskGroup } from './types/Task';
 import Viewer3D from './components/Viewer3D';
 import { addDays, format, parseISO, differenceInDays, startOfWeek, isSameDay } from 'date-fns';
@@ -79,12 +79,26 @@ const MAX_HISTORY = 50;
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [groups, setGroups] = useState<TaskGroup[]>([]);
-  const [viewStart] = useState(() => {
+  const [viewStart, setViewStart] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() - 7);
     return d;
   });
   const [dayWidth, setDayWidth] = useState(DAY_WIDTH_DEFAULT);
+
+  const handlePrevDays = () => {
+    setViewStart(prev => addDays(prev, -7));
+  };
+
+  const handleNextDays = () => {
+    setViewStart(prev => addDays(prev, 7));
+  };
+
+  const handleGoToToday = () => {
+    const d = new Date();
+    d.setDate(d.getDate() - 7);
+    setViewStart(d);
+  };
   const [dragging, setDragging] = useState<DragState | null>(null);
   const dragDeltaRef = useRef(0);
   const [dragDelta, setDragDelta] = useState(0);
@@ -1272,6 +1286,31 @@ export default function App() {
             title="Rehacer"
           >
             <TbArrowForwardUp size={14} />
+          </button>
+          <div className="w-px h-4 mx-1" style={{ backgroundColor: borderColor }} />
+          <button
+            onClick={handlePrevDays}
+            className="px-2 py-1 text-xs rounded hover:opacity-80 transition-colors"
+            style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0', color: textPrimary }}
+            title="Retroceder 7 días"
+          >
+            <TbChevronLeft size={14} />
+          </button>
+          <button
+            onClick={handleGoToToday}
+            className="px-2.5 py-1 text-[11px] rounded hover:opacity-80 transition-colors font-medium"
+            style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0', color: textPrimary }}
+            title="Ir a hoy"
+          >
+            Hoy
+          </button>
+          <button
+            onClick={handleNextDays}
+            className="px-2 py-1 text-xs rounded hover:opacity-80 transition-colors"
+            style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0', color: textPrimary }}
+            title="Avanzar 7 días"
+          >
+            <TbChevronRight size={14} />
           </button>
         </div>
         <h1 className="text-base font-semibold tracking-tight">Pipeline de Actividad Semanal</h1>
