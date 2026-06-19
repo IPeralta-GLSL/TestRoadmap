@@ -7,6 +7,17 @@ export interface Attachment {
   created_at: string;
 }
 
+export interface ForgejoLink {
+  id: number;
+  task_id: number;
+  type: 'repo' | 'issue' | 'pr' | 'commit';
+  title: string;
+  url: string;
+  repo_name: string;
+  item_id: string | null;
+  created_at: string;
+}
+
 export interface Task {
   id: number;
   name: string;
@@ -20,6 +31,7 @@ export interface Task {
   attachments: Attachment[];
   group_id: number | null;
   position: number;
+  forgejo_links?: ForgejoLink[];
 }
 
 export interface TaskGroup {

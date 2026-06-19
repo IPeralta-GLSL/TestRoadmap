@@ -6,6 +6,7 @@ import Database from 'better-sqlite3';
 import path from 'path';
 
 const app = express();
+const FORGEJO_TOKEN = 'gto_k6skuazpd6n3v354te7yjhsyvr7yzq4lgc4af722qkfpcigfu44a';
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -65,6 +66,20 @@ db.exec(`
   )
 `);
 
+db.exec(`
+  CREATE TABLE IF NOT EXISTS task_forgejo_links (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    type TEXT NOT NULL,
+    title TEXT NOT NULL,
+    url TEXT NOT NULL,
+    repo_name TEXT NOT NULL,
+    item_id TEXT,
+    created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+  )
+`);
+
 const migrateTasks = () => {
   const cols = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
   const colNames = cols.map(c => c.name);
@@ -111,6 +126,22 @@ const migrateTasks = () => {
         file_name TEXT NOT NULL,
         file_type TEXT NOT NULL,
         file_data TEXT NOT NULL,
+        created_at TEXT DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+      )
+    `);
+  }
+  const forgejoTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='task_forgejo_links'").all();
+  if (forgejoTables.length === 0) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS task_forgejo_links (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        task_id INTEGER NOT NULL,
+        type TEXT NOT NULL,
+        title TEXT NOT NULL,
+        url TEXT NOT NULL,
+        repo_name TEXT NOT NULL,
+        item_id TEXT,
         created_at TEXT DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
       )
@@ -172,15 +203,31 @@ app.delete('/api/groups/:id', (req, res) => {
   }
 });
 
+const getTaskWithRelations = (id: string | number) => {
+  const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as any;
+  if (!task) return null;
+  const deps = db.prepare('SELECT depends_on_id FROM task_dependencies WHERE task_id = ?').all(id) as { depends_on_id: number }[];
+  const attachments = db.prepare('SELECT * FROM task_attachments WHERE task_id = ?').all(id) as any[];
+  const forgejoLinks = db.prepare('SELECT * FROM task_forgejo_links WHERE task_id = ?').all(id) as any[];
+  return {
+    ...task,
+    dependencies: deps.map(d => d.depends_on_id),
+    attachments,
+    forgejo_links: forgejoLinks
+  };
+};
+
 app.get('/api/tasks', (_req, res) => {
   try {
     const tasks = db.prepare('SELECT * FROM tasks').all() as any[];
     const deps = db.prepare('SELECT * FROM task_dependencies').all() as { task_id: number; depends_on_id: number }[];
     const attachments = db.prepare('SELECT * FROM task_attachments').all() as any[];
+    const forgejoLinks = db.prepare('SELECT * FROM task_forgejo_links').all() as any[];
     const tasksWithDeps = tasks.map(t => ({
       ...t,
       dependencies: deps.filter(d => d.task_id === t.id).map(d => d.depends_on_id),
       attachments: attachments.filter(a => a.task_id === t.id),
+      forgejo_links: forgejoLinks.filter(f => f.task_id === t.id),
     }));
     res.json(tasksWithDeps);
   } catch (error) {
@@ -197,7 +244,7 @@ app.post('/api/tasks', (req, res) => {
     const result = stmt.run(name, start_date, end_date, estimate || null, color || '#4caf50', status || 'pendiente', notes || '', group_id || null);
     const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(result.lastInsertRowid) as any;
     const deps = db.prepare('SELECT depends_on_id FROM task_dependencies WHERE task_id = ?').all(result.lastInsertRowid) as { depends_on_id: number }[];
-    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id), attachments: [] };
+    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id), attachments: [], forgejo_links: [] };
 
     io.emit('task-created', taskWithDeps);
 
@@ -215,12 +262,11 @@ app.put('/api/tasks/:id', (req, res) => {
       'UPDATE tasks SET name = ?, start_date = ?, end_date = ?, estimate = ?, color = ?, status = ?, notes = ?, group_id = ? WHERE id = ?'
     );
     stmt.run(name, start_date, end_date, estimate || null, color || '#4caf50', status || 'pendiente', notes || '', group_id || null, id);
-    const task = db.prepare('SELECT * FROM tasks WHERE id = ?').get(id) as any;
-    const deps = db.prepare('SELECT depends_on_id FROM task_dependencies WHERE task_id = ?').all(id) as { depends_on_id: number }[];
-    const attachments = db.prepare('SELECT * FROM task_attachments WHERE task_id = ?').all(id) as any[];
-    const taskWithDeps = { ...task, dependencies: deps.map(d => d.depends_on_id), attachments };
+    const taskWithDeps = getTaskWithRelations(id);
 
-    io.emit('task-updated', taskWithDeps);
+    if (taskWithDeps) {
+      io.emit('task-updated', taskWithDeps);
+    }
 
     res.json(taskWithDeps);
   } catch (error) {
@@ -355,7 +401,8 @@ app.get('/api/project/export', (_req, res) => {
     const groups = db.prepare('SELECT * FROM task_groups').all();
     const dependencies = db.prepare('SELECT * FROM task_dependencies').all();
     const attachments = db.prepare('SELECT * FROM task_attachments').all();
-    res.json({ tasks, groups, dependencies, attachments });
+    const forgejo_links = db.prepare('SELECT * FROM task_forgejo_links').all();
+    res.json({ tasks, groups, dependencies, attachments, forgejo_links });
   } catch (error) {
     res.status(500).json({ error: 'Error exporting project' });
   }
@@ -363,7 +410,7 @@ app.get('/api/project/export', (_req, res) => {
 
 app.post('/api/project/import', (req, res) => {
   try {
-    const { tasks, groups, dependencies, attachments } = req.body;
+    const { tasks, groups, dependencies, attachments, forgejo_links } = req.body;
     if (!Array.isArray(tasks) || !Array.isArray(groups)) {
       res.status(400).json({ error: 'Invalid project data' });
       return;
@@ -372,6 +419,7 @@ app.post('/api/project/import', (req, res) => {
     const runImport = db.transaction(() => {
       db.prepare('DELETE FROM task_attachments').run();
       db.prepare('DELETE FROM task_dependencies').run();
+      db.prepare('DELETE FROM task_forgejo_links').run();
       db.prepare('DELETE FROM tasks').run();
       db.prepare('DELETE FROM task_groups').run();
 
@@ -417,6 +465,15 @@ app.post('/api/project/import', (req, res) => {
           insertAtt.run(a.id, a.task_id, a.file_name, a.file_type, a.file_data, a.created_at || null);
         });
       }
+
+      if (Array.isArray(forgejo_links)) {
+        const insertLink = db.prepare(
+          'INSERT INTO task_forgejo_links (id, task_id, type, title, url, repo_name, item_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)'
+        );
+        forgejo_links.forEach((l: any) => {
+          insertLink.run(l.id, l.task_id, l.type, l.title, l.url, l.repo_name, l.item_id || null, l.created_at || null);
+        });
+      }
     });
 
     runImport();
@@ -435,6 +492,7 @@ app.post('/api/project/clear', (_req, res) => {
     db.transaction(() => {
       db.prepare('DELETE FROM task_attachments').run();
       db.prepare('DELETE FROM task_dependencies').run();
+      db.prepare('DELETE FROM task_forgejo_links').run();
       db.prepare('DELETE FROM tasks').run();
       db.prepare('DELETE FROM task_groups').run();
     })();
@@ -443,6 +501,199 @@ app.post('/api/project/clear', (_req, res) => {
   } catch (error) {
     console.error('Error clearing project:', error);
     res.status(500).json({ error: 'Error clearing project' });
+  }
+});
+
+app.post('/api/tasks/:id/forgejo-links', (req, res) => {
+  try {
+    const { id } = req.params;
+    const { type, title, url, repo_name, item_id } = req.body;
+    const stmt = db.prepare(
+      'INSERT INTO task_forgejo_links (task_id, type, title, url, repo_name, item_id) VALUES (?, ?, ?, ?, ?, ?)'
+    );
+    const result = stmt.run(id, type, title, url, repo_name, item_id || null);
+    const link = db.prepare('SELECT * FROM task_forgejo_links WHERE id = ?').get(result.lastInsertRowid);
+    const task = getTaskWithRelations(id);
+    if (task) {
+      io.emit('task-updated', task);
+    }
+    res.status(201).json({ link, task });
+  } catch (error) {
+    res.status(500).json({ error: 'Error creating forgejo link' });
+  }
+});
+
+app.delete('/api/forgejo-links/:id', (req, res) => {
+  try {
+    const { id } = req.params;
+    const link = db.prepare('SELECT * FROM task_forgejo_links WHERE id = ?').get(id) as any;
+    if (!link) {
+      res.status(404).json({ error: 'Link not found' });
+      return;
+    }
+    db.prepare('DELETE FROM task_forgejo_links WHERE id = ?').run(id);
+    const task = getTaskWithRelations(link.task_id);
+    if (task) {
+      io.emit('task-updated', task);
+    }
+    res.json({ message: 'Forgejo link deleted', task });
+  } catch (error) {
+    res.status(500).json({ error: 'Error deleting forgejo link' });
+  }
+});
+
+app.get('/api/forgejo/repos', async (req, res) => {
+  try {
+    const token = req.headers['x-forgejo-token'] || FORGEJO_TOKEN;
+    if (!token) {
+      res.status(401).json({ error: 'Token de acceso de Forgejo requerido' });
+      return;
+    }
+    const headers: Record<string, string> = {
+      'Authorization': `token ${token}`
+    };
+    const response = await fetch('http://100.80.155.128:3000/api/v1/user/repos?limit=100', { headers });
+    if (!response.ok) {
+      res.status(response.status).json({ error: 'Error al obtener repositorios de Forgejo' });
+      return;
+    }
+    const repos = await response.json() as any[];
+    const orgsResponse = await fetch('http://100.80.155.128:3000/api/v1/user/orgs', { headers });
+    if (orgsResponse.ok) {
+      const orgs = await orgsResponse.json() as any[];
+      for (const org of orgs) {
+        const orgName = org.username || org.name;
+        if (orgName) {
+          const orgReposResponse = await fetch(`http://100.80.155.128:3000/api/v1/orgs/${orgName}/repos?limit=100`, { headers });
+          if (orgReposResponse.ok) {
+            const orgRepos = await orgReposResponse.json() as any[];
+            for (const repo of orgRepos) {
+              if (!repos.some(r => r.id === repo.id)) {
+                repos.push(repo);
+              }
+            }
+          }
+        }
+      }
+    }
+    res.json(repos);
+  } catch (error) {
+    res.status(500).json({ error: 'Servidor Forgejo inaccesible' });
+  }
+});
+
+app.get('/api/forgejo/search-repos', async (req, res) => {
+  try {
+    const q = req.query.q || '';
+    const token = req.headers['x-forgejo-token'] || FORGEJO_TOKEN;
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `token ${token}`;
+    }
+    const response = await fetch(`http://100.80.155.128:3000/api/v1/repos/search?limit=20&q=${encodeURIComponent(String(q))}`, { headers });
+    if (!response.ok) {
+      res.status(response.status).json({ error: 'Error fetching from Forgejo' });
+      return;
+    }
+    const data = await response.json() as any;
+    res.json(data.data || []);
+  } catch (error) {
+    res.status(500).json({ error: 'Forgejo server unreachable' });
+  }
+});
+
+app.get('/api/forgejo/repo-issues', async (req, res) => {
+  try {
+    const { owner, repo } = req.query;
+    if (!owner || !repo) {
+      res.status(400).json({ error: 'Missing owner or repo parameter' });
+      return;
+    }
+    const token = req.headers['x-forgejo-token'] || FORGEJO_TOKEN;
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `token ${token}`;
+    }
+    const response = await fetch(`http://100.80.155.128:3000/api/v1/repos/${owner}/${repo}/issues?state=all&limit=50`, { headers });
+    if (!response.ok) {
+      res.status(response.status).json({ error: 'Error fetching issues from Forgejo' });
+      return;
+    }
+    const data = await response.json() as any[];
+    res.json(data);
+  } catch (error) {
+    res.status(500).json({ error: 'Forgejo server unreachable' });
+  }
+});
+
+app.get('/api/forgejo/resolve-url', async (req, res) => {
+  try {
+    const urlStr = req.query.url;
+    if (!urlStr) {
+      res.status(400).json({ error: 'Missing url parameter' });
+      return;
+    }
+    const parsed = new URL(String(urlStr));
+    const pathParts = parsed.pathname.split('/').filter(Boolean);
+    if (pathParts.length < 2) {
+      res.status(400).json({ error: 'Invalid URL path' });
+      return;
+    }
+    const [owner, repo, section, id] = pathParts;
+    const token = req.headers['x-forgejo-token'] || FORGEJO_TOKEN;
+    const headers: Record<string, string> = {};
+    if (token) {
+      headers['Authorization'] = `token ${token}`;
+    }
+
+    let type: 'repo' | 'issue' | 'pr' | 'commit' = 'repo';
+    let title = `${owner}/${repo}`;
+    let item_id: string | null = null;
+
+    if (section === 'issues' && id) {
+      type = 'issue';
+      item_id = id;
+      const resp = await fetch(`http://100.80.155.128:3000/api/v1/repos/${owner}/${repo}/issues/${id}`, { headers });
+      if (resp.ok) {
+        const issue = await resp.json() as any;
+        title = issue.title;
+        if (issue.pull_request) {
+          type = 'pr';
+        }
+      }
+    } else if (section === 'pulls' && id) {
+      type = 'pr';
+      item_id = id;
+      const resp = await fetch(`http://100.80.155.128:3000/api/v1/repos/${owner}/${repo}/issues/${id}`, { headers });
+      if (resp.ok) {
+        const issue = await resp.json() as any;
+        title = issue.title;
+      }
+    } else if (section === 'commit' && id) {
+      type = 'commit';
+      item_id = id;
+      const resp = await fetch(`http://100.80.155.128:3000/api/v1/repos/${owner}/${repo}/git/commits/${id}`, { headers });
+      if (resp.ok) {
+        const commit = await resp.json() as any;
+        title = (commit.message || '').split('\n')[0] || `Commit ${id.slice(0, 7)}`;
+      }
+    } else {
+      const resp = await fetch(`http://100.80.155.128:3000/api/v1/repos/${owner}/${repo}`, { headers });
+      if (resp.ok) {
+        const repository = await resp.json() as any;
+        title = repository.full_name || repository.name;
+      }
+    }
+
+    res.json({
+      type,
+      title,
+      url: String(urlStr),
+      repo_name: `${owner}/${repo}`,
+      item_id
+    });
+  } catch (error) {
+    res.status(500).json({ error: 'Forgejo server unreachable or invalid URL' });
   }
 });
 

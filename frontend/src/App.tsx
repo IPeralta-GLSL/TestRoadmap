@@ -133,6 +133,98 @@ export default function App() {
   const [detailModal, setDetailModal] = useState<DetailModalState | null>(null);
   const [linkMode, setLinkMode] = useState<{ fromTaskId: number } | null>(null);
   const [colorPickerFor, setColorPickerFor] = useState<number | null>(null);
+  const [forgejoToken, setForgejoToken] = useState(() => localStorage.getItem('roadmapper-forgejo-token') || 'gto_k6skuazpd6n3v354te7yjhsyvr7yzq4lgc4af722qkfpcigfu44a');
+  const [tempToken, setTempToken] = useState(forgejoToken);
+  const [showTokenSettings, setShowTokenSettings] = useState(false);
+  const [forgejoError, setForgejoError] = useState<string | null>(null);
+
+  useEffect(() => {
+    setTempToken(forgejoToken);
+  }, [forgejoToken]);
+
+  const [forgejoSearchQuery, setForgejoSearchQuery] = useState('');
+  const [forgejoRepos, setForgejoRepos] = useState<any[]>([]);
+  const [selectedRepo, setSelectedRepo] = useState<{ owner: string; name: string } | null>(null);
+  const [forgejoIssues, setForgejoIssues] = useState<any[]>([]);
+  const [isSearchingForgejo, setIsSearchingForgejo] = useState(false);
+
+
+  const fetchForgejoRepos = async () => {
+    if (!forgejoToken) return;
+    setIsSearchingForgejo(true);
+    setForgejoError(null);
+    try {
+      const res = await fetch(`${API_URL}/forgejo/repos`, {
+        headers: { 'X-Forgejo-Token': forgejoToken },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setForgejoRepos(data);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setForgejoError(errData.error || `Error ${res.status} al obtener repositorios`);
+      }
+    } catch (err) {
+      console.error(err);
+      setForgejoError('No se pudo conectar al servidor Forgejo');
+    } finally {
+      setIsSearchingForgejo(false);
+    }
+  };
+
+  useEffect(() => {
+    if (detailModal && forgejoToken) {
+      fetchForgejoRepos();
+    }
+  }, [detailModal, forgejoToken]);
+
+  const handleSelectForgejoRepo = async (owner: string, name: string) => {
+    setSelectedRepo({ owner, name });
+    setForgejoError(null);
+    try {
+      const res = await fetch(`${API_URL}/forgejo/repo-issues?owner=${owner}&repo=${name}`, {
+        headers: forgejoToken ? { 'X-Forgejo-Token': forgejoToken } : {},
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setForgejoIssues(data);
+      } else {
+        const errData = await res.json().catch(() => ({}));
+        setForgejoError(errData.error || `Error ${res.status} al obtener issues`);
+      }
+    } catch (err) {
+      console.error(err);
+      setForgejoError('No se pudieron obtener las issues del repositorio');
+    }
+  };
+
+  const handleLinkForgejoItem = async (taskId: number, type: 'repo' | 'issue' | 'pr' | 'commit', title: string, url: string, repoName: string, itemId: string | null) => {
+    try {
+      const saveRes = await fetch(`${API_URL}/tasks/${taskId}/forgejo-links`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ type, title, url, repo_name: repoName, item_id: itemId }),
+      });
+      if (saveRes.ok) {
+        await fetchTasks();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleUnlinkForgejoItem = async (linkId: number) => {
+    try {
+      const res = await fetch(`${API_URL}/forgejo-links/${linkId}`, {
+        method: 'DELETE',
+      });
+      if (res.ok) {
+        await fetchTasks();
+      }
+    } catch (err) {
+      console.error(err);
+    }
+  };
   const contextMenuRef = useRef<HTMLDivElement>(null);
   const dragStartRef = useRef<{ x: number; y: number; time: number; button: number } | null>(null);
   const [showAddDropdown, setShowAddDropdown] = useState(false);
@@ -1962,6 +2054,135 @@ export default function App() {
                       })}
                     </div>
                   ) : <p className="text-[11px] mt-2" style={{ color: textMuted }}>Sin dependencias</p>}
+                </div>
+                <div>
+                  <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Enlaces de Forgejo ({task.forgejo_links?.length || 0})</label>
+                  {task.forgejo_links && task.forgejo_links.length > 0 && (
+                    <div className="mt-2 space-y-1">
+                      {task.forgejo_links.map(link => (
+                        <div key={link.id} className="flex items-center justify-between px-3 py-1.5 rounded-lg border text-xs" style={{ borderColor, backgroundColor: subtleBg }}>
+                          <div className="flex items-center gap-1.5 min-w-0">
+                            <TbLink size={13} className="text-blue-500 flex-shrink-0" />
+                            <span className="text-[10px] bg-blue-100 dark:bg-blue-900/30 text-blue-600 px-1 rounded flex-shrink-0 font-semibold">{link.type.toUpperCase()}</span>
+                            <a href={link.url} target="_blank" rel="noopener noreferrer" className="hover:underline truncate font-medium" style={{ color: textPrimary }}>
+                              {link.title}
+                            </a>
+                            <span className="text-[9px]" style={{ color: textMuted }}>({link.repo_name})</span>
+                          </div>
+                          <button className="text-red-400 hover:text-red-600 font-bold ml-2 flex-shrink-0" onClick={() => handleUnlinkForgejoItem(link.id)}>✕</button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                  <div className="mt-3 border rounded-lg p-3" style={{ borderColor, backgroundColor: cardBg }}>
+                    <div className="flex items-center justify-between mb-2">
+                      <label className="text-[9px] font-semibold uppercase tracking-wider" style={{ color: textMuted }}>Forgejo</label>
+                      <button className="text-[9px] text-blue-500 hover:underline flex items-center gap-1 font-semibold" onClick={() => setShowTokenSettings(!showTokenSettings)}>
+                        <TbSettings size={11} /> {showTokenSettings ? 'Ocultar Token' : 'Configurar Token'}
+                      </button>
+                    </div>
+                    {showTokenSettings && (
+                      <div className="mb-3 p-2 rounded border border-dashed space-y-2" style={{ borderColor, backgroundColor: subtleBg }}>
+                        <div className="space-y-1">
+                          <label className="text-[8px] font-semibold uppercase tracking-wider block" style={{ color: textMuted }}>Token de Acceso Personal:</label>
+                          <div className="flex gap-2">
+                            <input
+                              type="password"
+                              placeholder="Token de acceso..."
+                              className="flex-1 px-2.5 py-1 text-xs border rounded-md outline-none"
+                              style={{ borderColor, backgroundColor: cardBg, color: textPrimary }}
+                              value={tempToken}
+                              onChange={(e) => setTempToken(e.target.value)}
+                            />
+                            <button
+                              className="px-2.5 py-1 text-[9px] font-semibold bg-blue-500 hover:bg-blue-600 text-white rounded transition-colors"
+                              onClick={() => {
+                                setForgejoToken(tempToken);
+                                localStorage.setItem('roadmapper-forgejo-token', tempToken);
+                                setShowTokenSettings(false);
+                              }}
+                            >
+                              Guardar
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+                    {forgejoError && (
+                      <p className="text-[10px] text-red-600 bg-red-50 dark:bg-red-950/20 p-2 rounded border border-red-200 dark:border-red-900/50 mb-3 font-medium animate-fadeIn">
+                        {forgejoError}
+                      </p>
+                    )}
+                    {!forgejoToken ? (
+                      <p className="text-[10px] text-orange-600 bg-orange-50 dark:bg-orange-950/20 p-2 rounded border border-orange-200 dark:border-orange-900/50">
+                        Por favor, configura tu Token de Acceso Personal para poder listar tus repositorios de Forgejo.
+                      </p>
+                    ) : (
+                      <div className="space-y-3">
+                        <div className="space-y-1">
+                          <input type="text" placeholder="Filtrar repositorios por nombre..." className="w-full px-2.5 py-1.5 text-xs border rounded-md outline-none" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} value={forgejoSearchQuery} onChange={(e) => setForgejoSearchQuery(e.target.value)} />
+                        </div>
+                        {isSearchingForgejo ? (
+                          <p className="text-[10px] text-center py-2" style={{ color: textMuted }}>Cargando repositorios...</p>
+                        ) : (
+                          <>
+                            {forgejoRepos.length > 0 ? (
+                              <div className="space-y-1 max-h-[140px] overflow-y-auto border rounded-md p-1.5" style={{ borderColor, backgroundColor: subtleBg }}>
+                                {forgejoRepos.filter(repo => repo.full_name.toLowerCase().includes(forgejoSearchQuery.toLowerCase())).map(repo => {
+                                  const isSelected = selectedRepo?.owner === repo.owner.login && selectedRepo?.name === repo.name;
+                                  const isLinked = task.forgejo_links?.some(l => l.url === repo.html_url);
+                                  return (
+                                    <div key={repo.id} className={`flex items-center justify-between p-1.5 rounded text-[11px] transition-all cursor-pointer ${isSelected ? 'bg-blue-500/10 border' : 'hover:bg-black/5 dark:hover:bg-white/5 border border-transparent'}`} style={{ borderColor: isSelected ? '#2196f3' : 'transparent' }} onClick={() => handleSelectForgejoRepo(repo.owner.login, repo.name)}>
+                                      <span className={`truncate flex-1 font-medium ${isSelected ? 'text-blue-500 font-bold' : ''}`} style={{ color: isSelected ? undefined : textPrimary }}>
+                                        {repo.full_name}
+                                      </span>
+                                      <button
+                                        disabled={isLinked}
+                                        className={`px-2 py-0.5 text-[9px] font-bold rounded transition-colors ${isLinked ? 'bg-gray-200 text-gray-400 cursor-not-allowed dark:bg-gray-800' : 'bg-blue-500 hover:bg-blue-600 text-white'}`}
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleLinkForgejoItem(task.id, 'repo', repo.full_name, repo.html_url, repo.full_name, null);
+                                        }}
+                                      >
+                                        {isLinked ? 'Vinculado' : 'Vincular'}
+                                      </button>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            ) : (
+                              <p className="text-[10px] text-center py-2" style={{ color: textMuted }}>No se encontraron repositorios vinculados a tu cuenta de Forgejo.</p>
+                            )}
+                          </>
+                        )}
+                        {selectedRepo && forgejoIssues.length > 0 && (
+                          <div className="space-y-1 max-h-[160px] overflow-y-auto border rounded-md p-1.5" style={{ borderColor, backgroundColor: subtleBg }}>
+                            <label className="text-[9px] font-semibold block mb-1" style={{ color: textMuted }}>Elementos disponibles para vincular:</label>
+                            {forgejoIssues.map(issue => {
+                              const isLinked = task.forgejo_links?.some(l => l.url === issue.html_url);
+                              return (
+                                <div key={issue.id} className="flex items-center justify-between py-1 px-1.5 hover:bg-black/5 dark:hover:bg-white/5 rounded text-[11px] gap-2">
+                                  <span className="truncate flex-1 font-medium" style={{ color: textPrimary }}>
+                                    #{issue.number} - {issue.title}
+                                  </span>
+                                  <button
+                                    disabled={isLinked}
+                                    className={`px-2 py-0.5 text-[9px] font-bold rounded transition-colors ${isLinked ? 'bg-gray-200 text-gray-400 cursor-not-allowed dark:bg-gray-800' : 'bg-blue-500 hover:bg-blue-600 text-white'}`}
+                                    onClick={() => handleLinkForgejoItem(task.id, issue.pull_request ? 'pr' : 'issue', issue.title, issue.html_url, `${selectedRepo.owner}/${selectedRepo.name}`, String(issue.number))}
+                                  >
+                                    {isLinked ? 'Vinculado' : 'Vincular'}
+                                  </button>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+                        {selectedRepo && forgejoIssues.length === 0 && (
+                          <p className="text-[10px] text-center py-2" style={{ color: textMuted }}>No se encontraron issues o pull requests abiertos en este repositorio.</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
             </div>
