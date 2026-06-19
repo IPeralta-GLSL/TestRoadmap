@@ -5,6 +5,7 @@ import { Task, Attachment, TaskGroup } from './types/Task';
 import Viewer3D from './components/Viewer3D';
 import { addDays, format, parseISO, differenceInDays, startOfWeek, isSameDay } from 'date-fns';
 import { es } from 'date-fns/locale';
+import * as XLSX from 'xlsx';
 
 const API_URL = '/api';
 const DAY_WIDTH_MIN = 30;
@@ -366,36 +367,205 @@ export default function App() {
     }
   };
 
+  const hexToRgb = (hex: string): { r: number; g: number; b: number } | null => {
+    const result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    if (!result) return null;
+    return { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) };
+  };
+
+  const blendWithWhite = (hex: string, opacity: number): string => {
+    const rgb = hexToRgb(hex);
+    if (!rgb) return 'FFFFFF';
+    const blend = (c: number) => Math.round(c * opacity + 255 * (1 - opacity));
+    const r = blend(rgb.r);
+    const g = blend(rgb.g);
+    const b = blend(rgb.b);
+    return ((1 << 24) + (r << 16) + (g << 8) + b).toString(16).slice(1).toUpperCase();
+  };
+
   const handleExportExcel = () => {
     try {
-      const headers = ['Grupo', 'Tarea', 'Fecha de Inicio', 'Fecha de Fin', 'Estimado', 'Estado', 'Notas'];
-      const rows = tasks.map(t => {
-        const groupName = groups.find(g => g.id === t.group_id)?.name || 'Sin grupo';
-        const cleanNotes = (t.notes || '').replace(/"/g, '""').replace(/\n/g, ' ');
-        return [
-          groupName,
-          t.name,
-          t.start_date,
-          t.end_date,
-          t.estimate || '',
-          t.status || '',
-          cleanNotes
-        ];
+      const wb = XLSX.utils.book_new();
+      const headers = ['Grupo', 'Color', 'Tarea', 'Fecha Inicio', 'Fecha Fin', 'Duración (días)', 'Estimado', 'Estado', 'Dependencias', 'Adjuntos', 'Notas'];
+
+      const sheetData: { type: 'header' | 'group' | 'task'; row: (string | number)[]; groupColor?: string }[] = [];
+      sheetData.push({ type: 'header', row: headers });
+
+      for (const group of groups) {
+        const groupTasks = tasks.filter(t => t.group_id === group.id);
+        sheetData.push({ type: 'group', row: [group.name, '', '', '', '', '', '', '', '', '', ''], groupColor: group.color });
+        for (const t of groupTasks) {
+          const depNames = (t.dependencies || []).map(depId => {
+            const dep = tasks.find(dt => dt.id === depId);
+            return dep ? dep.name : `#${depId}`;
+          }).join(', ');
+          const days = differenceInDays(parseISO(t.end_date), parseISO(t.start_date));
+          sheetData.push({
+            type: 'task',
+            row: [group.name, t.color || '#4caf50', t.name, t.start_date, t.end_date, days, t.estimate || '', t.status || 'pendiente', depNames, (t.attachments || []).length, (t.notes || '').replace(/\n/g, ' ')],
+            groupColor: group.color
+          });
+        }
+      }
+
+      const ungroupedTasks = tasks.filter(t => !t.group_id);
+      if (ungroupedTasks.length > 0) {
+        sheetData.push({ type: 'group', row: ['Sin grupo', '', '', '', '', '', '', '', '', '', ''], groupColor: '#888888' });
+        for (const t of ungroupedTasks) {
+          const depNames = (t.dependencies || []).map(depId => {
+            const dep = tasks.find(dt => dt.id === depId);
+            return dep ? dep.name : `#${depId}`;
+          }).join(', ');
+          const days = differenceInDays(parseISO(t.end_date), parseISO(t.start_date));
+          sheetData.push({
+            type: 'task',
+            row: ['Sin grupo', t.color || '#4caf50', t.name, t.start_date, t.end_date, days, t.estimate || '', t.status || 'pendiente', depNames, (t.attachments || []).length, (t.notes || '').replace(/\n/g, ' ')],
+            groupColor: '#888888'
+          });
+        }
+      }
+
+      const wsData = sheetData.map(d => d.row);
+      const ws = XLSX.utils.aoa_to_sheet(wsData);
+
+      const colWidths = headers.map((h, i) => {
+        let maxLen = h.length;
+        for (const entry of sheetData) {
+          if (entry.type !== 'header') {
+            const val = String(entry.row[i] ?? '');
+            if (val.length > maxLen) maxLen = val.length;
+          }
+        }
+        return { wch: Math.min(maxLen + 4, 50) };
       });
-      const csvContent = [
-        'sep=;',
-        headers.map(h => `"${h}"`).join(';'),
-        ...rows.map(row => row.map(val => `"${val}"`).join(';'))
-      ].join('\n');
-      const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `reporte-roadmap-${format(new Date(), 'yyyy-MM-dd-HH-mm')}.csv`;
-      document.body.appendChild(a);
-      a.click();
-      document.body.removeChild(a);
-      URL.revokeObjectURL(url);
+      ws['!cols'] = colWidths;
+
+      const statusColorMap: Record<string, string> = {
+        'completada': '2E7D32',
+        'en progreso': 'F9A825',
+        'pendiente': 'E53935',
+        'cancelada': '757575'
+      };
+
+      const statusTextColorMap: Record<string, string> = {
+        'completada': 'FFFFFF',
+        'en progreso': '000000',
+        'pendiente': 'FFFFFF',
+        'cancelada': 'FFFFFF'
+      };
+
+      const range = XLSX.utils.decode_range(ws['!ref']!);
+      for (let R = range.s.r; R <= range.e.r; ++R) {
+        for (let C = range.s.c; C <= range.e.c; ++C) {
+          const addr = XLSX.utils.encode_cell({ r: R, c: C });
+          if (!ws[addr]) ws[addr] = { t: 's', v: '' };
+          const entry = sheetData[R];
+
+          if (R === 0) {
+            ws[addr].s = {
+              font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 12 },
+              fill: { fgColor: { rgb: '1B5E20' } },
+              alignment: { horizontal: 'center', vertical: 'center' },
+              border: {
+                top: { style: 'medium', color: { rgb: '1B5E20' } },
+                bottom: { style: 'medium', color: { rgb: '1B5E20' } },
+                left: { style: 'thin', color: { rgb: 'A5D6A7' } },
+                right: { style: 'thin', color: { rgb: 'A5D6A7' } }
+              }
+            };
+          } else if (entry && entry.type === 'group') {
+            const gColor = entry.groupColor ? entry.groupColor.replace('#', '').toUpperCase() : '607D8B';
+            ws[addr].s = {
+              font: { bold: true, color: { rgb: 'FFFFFF' }, sz: 11 },
+              fill: { fgColor: { rgb: gColor } },
+              alignment: { vertical: 'center' },
+              border: {
+                top: { style: 'medium', color: { rgb: gColor } },
+                bottom: { style: 'medium', color: { rgb: gColor } },
+                left: { style: 'medium', color: { rgb: gColor } },
+                right: { style: 'medium', color: { rgb: gColor } }
+              }
+            };
+          } else if (entry && entry.type === 'task') {
+            const taskColor = entry.groupColor ? entry.groupColor.replace('#', '').toUpperCase() : 'E3F2FD';
+            const tintedBg = blendWithWhite('#' + taskColor, 0.15);
+
+            ws[addr].s = {
+              border: {
+                top: { style: 'thin', color: { rgb: 'CFD8DC' } },
+                bottom: { style: 'thin', color: { rgb: 'CFD8DC' } },
+                left: { style: 'thin', color: { rgb: 'CFD8DC' } },
+                right: { style: 'thin', color: { rgb: 'CFD8DC' } }
+              },
+              fill: { fgColor: { rgb: tintedBg } }
+            };
+
+            if (C === 1) {
+              const taskOwnColor = String(entry.row[1] || '#4caf50').replace('#', '').toUpperCase();
+              ws[addr].s = {
+                ...ws[addr].s,
+                fill: { fgColor: { rgb: taskOwnColor } },
+                font: { color: { rgb: 'FFFFFF' }, bold: true, sz: 10 },
+                alignment: { horizontal: 'center' }
+              };
+            }
+
+            if (C === 7) {
+              const statusVal = String(ws[addr].v || '').toLowerCase();
+              const sColor = statusColorMap[statusVal];
+              const sText = statusTextColorMap[statusVal];
+              if (sColor) {
+                ws[addr].s = {
+                  ...ws[addr].s,
+                  fill: { fgColor: { rgb: sColor } },
+                  font: { color: { rgb: sText || 'FFFFFF' }, bold: true, sz: 10 },
+                  alignment: { horizontal: 'center' }
+                };
+              }
+            }
+
+            if (C === 2) {
+              ws[addr].s = { ...ws[addr].s, font: { ...ws[addr].s?.font, bold: true, sz: 10 } };
+            }
+
+            if (C === 0 || C === 10) {
+              ws[addr].s = { ...ws[addr].s, alignment: { wrapText: true, vertical: 'center' } };
+            }
+
+            if (C === 5 || C === 9) {
+              ws[addr].s = { ...ws[addr].s, alignment: { horizontal: 'center', vertical: 'center' } };
+            }
+          }
+        }
+      }
+
+      const lastDataRow = range.e.r;
+      if (lastDataRow > 0) {
+        const statusColAddr = 'H2:H' + (lastDataRow + 1);
+        if (!ws['!dataValidations']) ws['!dataValidations'] = [];
+        ws['!dataValidations'].push({
+          sqref: statusColAddr,
+          type: 'list',
+          allowBlank: true,
+          formulae: ['"pendiente,en progreso,completada,cancelada"']
+        });
+      }
+
+      ws['!rows'] = [];
+      ws['!rows'][0] = { hpt: 30 };
+      for (let i = 1; i <= lastDataRow; ++i) {
+        const entry = sheetData[i];
+        if (entry && entry.type === 'group') {
+          ws['!rows'][i] = { hpt: 26 };
+        } else {
+          ws['!rows'][i] = { hpt: 22 };
+        }
+      }
+
+      XLSX.utils.book_append_sheet(wb, ws, 'Reporte Pipeline Actividad');
+
+      const fileName = `reporte-pipeline-actividad-semanal-${format(new Date(), 'yyyy-MM-dd-HH-mm')}.xlsx`;
+      XLSX.writeFile(wb, fileName);
     } catch (err) {
       console.error(err);
       alert('Error al exportar a Excel');
