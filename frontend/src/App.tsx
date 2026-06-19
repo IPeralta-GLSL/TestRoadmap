@@ -85,19 +85,41 @@ export default function App() {
     return d;
   });
   const [dayWidth, setDayWidth] = useState(DAY_WIDTH_DEFAULT);
+  const [slideOffset, setSlideOffset] = useState(0);
+  const [animateSlide, setAnimateSlide] = useState(false);
+
+  const slideStyle: React.CSSProperties = {
+    transform: `translateX(${slideOffset}px)`,
+    transition: animateSlide ? 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1)' : 'none',
+  };
+
+  const shiftViewStart = (days: number) => {
+    setAnimateSlide(false);
+    setSlideOffset(days * dayWidth);
+    setViewStart(prev => addDays(prev, days));
+    requestAnimationFrame(() => {
+      requestAnimationFrame(() => {
+        setAnimateSlide(true);
+        setSlideOffset(0);
+      });
+    });
+  };
 
   const handlePrevDays = () => {
-    setViewStart(prev => addDays(prev, -7));
+    shiftViewStart(-7);
   };
 
   const handleNextDays = () => {
-    setViewStart(prev => addDays(prev, 7));
+    shiftViewStart(7);
   };
 
   const handleGoToToday = () => {
     const d = new Date();
     d.setDate(d.getDate() - 7);
-    setViewStart(d);
+    const days = differenceInDays(d, viewStart);
+    if (days !== 0) {
+      shiftViewStart(days);
+    }
   };
   const [dragging, setDragging] = useState<DragState | null>(null);
   const dragDeltaRef = useRef(0);
@@ -1040,7 +1062,7 @@ export default function App() {
 
     if (arrows.length === 0) return null;
     return (
-      <svg style={{ position: 'absolute', top: 0, left: sidebarWidth, width: numDays * dayWidth, height: totalRowsHeight, pointerEvents: 'none', zIndex: 5 }}>
+      <svg style={{ position: 'absolute', top: 0, left: sidebarWidth, width: numDays * dayWidth, height: totalRowsHeight, pointerEvents: 'none', zIndex: 5, ...slideStyle }}>
         <defs>
           {tasks.filter(t => t.dependencies && t.dependencies.length > 0).map(task => (
             <marker key={`marker-${task.id}`} id={`arrowhead-${task.id}`} markerWidth="8" markerHeight="6" refX="8" refY="3" orient="auto">
@@ -1336,6 +1358,7 @@ export default function App() {
         <div
           ref={scrollRef}
           className="flex-1 overflow-x-auto overflow-y-auto"
+          style={{ scrollBehavior: 'smooth' }}
         >
           <div
             ref={calendarContainerRef}
@@ -1354,13 +1377,15 @@ export default function App() {
                   onMouseDown={handleSidebarResizeStart}
                 />
               </div>
-              {weeks.map((week, wi) => (
-                <div key={wi} className="flex" style={{ width: week.days.length * dayWidth }}>
-                  <div className="text-[10px] font-medium px-1 py-1" style={{ width: week.days.length * dayWidth, color: textMuted }}>
-                    {format(week.weekStart, 'MMM yyyy', { locale: es })}
+              <div className="flex" style={slideStyle}>
+                {weeks.map((week, wi) => (
+                  <div key={wi} className="flex" style={{ width: week.days.length * dayWidth }}>
+                    <div className="text-[10px] font-medium px-1 py-1" style={{ width: week.days.length * dayWidth, color: textMuted }}>
+                      {format(week.weekStart, 'MMM yyyy', { locale: es })}
+                    </div>
                   </div>
-                </div>
-              ))}
+                ))}
+              </div>
             </div>
 
             <div className="flex border-b sticky top-0 z-10" style={{ borderColor, backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
@@ -1373,25 +1398,27 @@ export default function App() {
                   onMouseDown={handleSidebarResizeStart}
                 />
               </div>
-              {calendarDays.map((day, i) => {
-                const dayOfWeek = day.getDay();
-                const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-                return (
-                  <div
-                    key={i}
-                    className="text-center border-r"
-                    style={{
-                      width: dayWidth,
-                      borderColor,
-                      backgroundColor: isWeekend ? (isDark ? '#252525' : '#f0f0f0') : subtleBg,
-                    }}
-                  >
-                    <div className="text-[10px]" style={{ color: textMuted }}>{dayNames[(dayOfWeek + 6) % 7]}</div>
-                    <div className="h-px my-0.5" style={{ backgroundColor: borderColor }} />
-                    <div className="text-[10px] font-medium">{format(day, 'd')}</div>
-                  </div>
-                );
-              })}
+              <div className="flex" style={slideStyle}>
+                {calendarDays.map((day, i) => {
+                  const dayOfWeek = day.getDay();
+                  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                  return (
+                    <div
+                      key={i}
+                      className="text-center border-r"
+                      style={{
+                        width: dayWidth,
+                        borderColor,
+                        backgroundColor: isWeekend ? (isDark ? '#252525' : '#f0f0f0') : subtleBg,
+                      }}
+                    >
+                      <div className="text-[10px]" style={{ color: textMuted }}>{dayNames[(dayOfWeek + 6) % 7]}</div>
+                      <div className="h-px my-0.5" style={{ backgroundColor: borderColor }} />
+                      <div className="text-[10px] font-medium">{format(day, 'd')}</div>
+                    </div>
+                  );
+                })}
+              </div>
             </div>
 
             <div className="relative">
@@ -1469,7 +1496,7 @@ export default function App() {
                           <TbSettings size={11} />
                         </button>
                       </div>
-                      <div className="flex-1 relative">
+                      <div className="flex-1 relative" style={slideStyle}>
                         {group.collapsed && collapsedGroupTasks.map(ct => {
                           const sIdx = getDayIndex(ct.start_date, viewStart);
                           const eIdx = getDayIndex(ct.end_date, viewStart);
@@ -1559,7 +1586,7 @@ export default function App() {
                       <button onClick={() => deleteTask(task.id)} className="text-gray-300 hover:text-red-500 text-[9px] font-bold flex-shrink-0">×</button>
                     </div>
 
-                    <div className="flex-1 relative">
+                    <div className="flex-1 relative" style={slideStyle}>
                       {calendarDays.map((day, i) => {
                         const dayOfWeek = day.getDay();
                         const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
@@ -1641,7 +1668,7 @@ export default function App() {
               const todayIndex = differenceInDays(new Date(), viewStart);
               if (todayIndex < 0 || todayIndex >= numDays) return null;
               return (
-                <div className="absolute top-0 bottom-0 pointer-events-none" style={{ left: sidebarWidth + todayIndex * dayWidth + dayWidth / 2, width: 2, backgroundColor: '#f44336', zIndex: 4 }}>
+                <div className="absolute top-0 bottom-0 pointer-events-none" style={{ left: sidebarWidth + todayIndex * dayWidth + dayWidth / 2, width: 2, backgroundColor: '#f44336', zIndex: 4, ...slideStyle }}>
                   <div className="absolute -top-0 left-1/2 -translate-x-1/2 text-[9px] font-bold text-white px-1 py-0.5 rounded whitespace-nowrap" style={{ backgroundColor: '#f44336' }}>
                     Hoy
                   </div>
