@@ -94,6 +94,8 @@ db.exec(`
   )
 `);
 
+const presenceMap = new Map<string, any>();
+
 const migrateTasks = () => {
   const cols = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
   const colNames = cols.map(c => c.name);
@@ -833,7 +835,20 @@ app.get('/{*path}', (_req, res) => {
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
+  socket.on('presence:join', (p) => {
+    presenceMap.set(socket.id, { socketId: socket.id, ...p });
+    io.emit('presence:state', Array.from(presenceMap.values()));
+  });
+
+  socket.on('presence:update', (p) => {
+    const existing = presenceMap.get(socket.id) || {};
+    presenceMap.set(socket.id, { socketId: socket.id, ...existing, ...p });
+    io.emit('presence:state', Array.from(presenceMap.values()));
+  });
+
   socket.on('disconnect', () => {
+    presenceMap.delete(socket.id);
+    io.emit('presence:state', Array.from(presenceMap.values()));
     console.log('Client disconnected:', socket.id);
   });
 });

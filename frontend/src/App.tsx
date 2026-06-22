@@ -4,6 +4,7 @@ import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForw
 import { Task, Attachment, TaskGroup } from './types/Task';
 import Viewer3D from './components/Viewer3D';
 import GlobalHistory from './components/GlobalHistory';
+import PresenceIndicator from './components/PresenceIndicator';
 import { addDays, format, parseISO, differenceInDays, startOfWeek, isSameDay } from 'date-fns';
 import { es } from 'date-fns/locale';
 import * as XLSX from 'xlsx';
@@ -1324,6 +1325,7 @@ export default function App() {
 
       <div className="flex items-center justify-between px-4 py-2 border-b" style={{ borderColor, backgroundColor: cardBg }}>
         <div className="flex items-center gap-2">
+          <PresenceIndicator />
           <div ref={projectDropdownRef} className="relative">
             <button
               className="px-3 py-1 text-xs rounded hover:opacity-80 transition-colors flex items-center gap-1 font-medium"
