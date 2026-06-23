@@ -1921,7 +1921,7 @@ export default function App() {
         if (!task) return null;
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 anim-overlay" onClick={() => setDetailModal(null)}>
-            <div className="rounded-xl shadow-2xl w-[420px] max-h-[80vh] overflow-y-auto anim-modal" style={{ backgroundColor: cardBg }} onClick={(e) => e.stopPropagation()}>
+            <div className="rounded-xl shadow-2xl w-[420px] max-h-[80vh] overflow-y-auto custom-scrollbar anim-modal" style={{ backgroundColor: cardBg }} onClick={(e) => e.stopPropagation()}>
               <div className="px-6 py-4 rounded-t-xl flex items-center justify-between" style={{ backgroundColor: hexToRgba(task.color || '#4caf50', 0.15) }}>
                 <h2 className="text-sm font-bold" style={{ color: darkenColor(task.color || '#4caf50', 0.6) }}>Detalles de la tarea</h2>
                 <button className="text-lg font-bold" style={{ color: textMuted }} onClick={() => setDetailModal(null)}><TbX size={18} /></button>
@@ -2127,7 +2127,7 @@ export default function App() {
                         ) : (
                           <>
                             {forgejoRepos.length > 0 ? (
-                              <div className="space-y-1 max-h-[140px] overflow-y-auto border rounded-md p-1.5" style={{ borderColor, backgroundColor: subtleBg }}>
+                              <div className="space-y-1 max-h-[140px] overflow-y-auto custom-scrollbar border rounded-md p-1.5" style={{ borderColor, backgroundColor: subtleBg }}>
                                 {forgejoRepos.filter(repo => repo.full_name.toLowerCase().includes(forgejoSearchQuery.toLowerCase())).map(repo => {
                                   const isSelected = selectedRepo?.owner === repo.owner.login && selectedRepo?.name === repo.name;
                                   const isLinked = task.forgejo_links?.some(l => l.url === repo.html_url);
@@ -2156,7 +2156,7 @@ export default function App() {
                           </>
                         )}
                         {selectedRepo && forgejoIssues.length > 0 && (
-                          <div className="space-y-1 max-h-[160px] overflow-y-auto border rounded-md p-1.5" style={{ borderColor, backgroundColor: subtleBg }}>
+                          <div className="space-y-1 max-h-[160px] overflow-y-auto custom-scrollbar border rounded-md p-1.5" style={{ borderColor, backgroundColor: subtleBg }}>
                             <label className="text-[9px] font-semibold block mb-1" style={{ color: textMuted }}>Elementos disponibles para vincular:</label>
                             {forgejoIssues.map(issue => {
                               const isLinked = task.forgejo_links?.some(l => l.url === issue.html_url);
