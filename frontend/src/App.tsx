@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload, TbChevronDown, TbChevronLeft, TbChevronRight, TbFolder, TbSun, TbMoon, TbAlertTriangle, TbSettings, TbClock } from 'react-icons/tb';
+import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload, TbChevronDown, TbChevronLeft, TbChevronRight, TbFolder, TbSun, TbMoon, TbAlertTriangle, TbSettings, TbClock, TbPlus, TbGripVertical, TbArrowUp, TbArrowDown } from 'react-icons/tb';
 import { Task, Attachment, TaskGroup } from './types/Task';
 import Viewer3D from './components/Viewer3D';
 import GlobalHistory from './components/GlobalHistory';
@@ -247,6 +247,9 @@ export default function App() {
   const [hoveredTask, setHoveredTask] = useState<number | null>(null);
   const [sidebarDragTaskId, setSidebarDragTaskId] = useState<number | null>(null);
   const [sidebarDragOverGroupId, setSidebarDragOverGroupId] = useState<number | null | 'ungrouped'>('ungrouped');
+  const [reorderDragTaskId, setReorderDragTaskId] = useState<number | null>(null);
+  const [reorderDropTargetId, setReorderDropTargetId] = useState<number | null>(null);
+  const [reorderDropPosition, setReorderDropPosition] = useState<'before' | 'after'>('after');
   const [showGlobalHistory, setShowGlobalHistory] = useState(false);
 
   const [history, setHistory] = useState<Task[][]>([[]]);
@@ -307,6 +310,86 @@ export default function App() {
     } catch (err) {
       console.error('Error moving task:', err);
     }
+  };
+
+  const reorderTasks = async (groupId: number | null, orderedIds: number[]) => {
+    try {
+      await fetch(`${API_URL}/tasks/reorder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ordered_ids: orderedIds }),
+      });
+      await fetchTasks();
+    } catch (err) {
+      console.error('Error reordering tasks:', err);
+    }
+  };
+
+  const handleReorderDragStart = (e: React.DragEvent, taskId: number) => {
+    e.dataTransfer.setData('text/reorder', String(taskId));
+    e.dataTransfer.effectAllowed = 'move';
+    setReorderDragTaskId(taskId);
+  };
+
+  const handleReorderDragOver = (e: React.DragEvent, targetTaskId: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = e.currentTarget.getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    const pos = e.clientY < midY ? 'before' : 'after';
+    setReorderDropTargetId(targetTaskId);
+    setReorderDropPosition(pos);
+  };
+
+  const handleReorderDrop = (e: React.DragEvent, targetTaskId: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const draggedId = parseInt(e.dataTransfer.getData('text/reorder'));
+    if (!draggedId || draggedId === targetTaskId) {
+      setReorderDragTaskId(null);
+      setReorderDropTargetId(null);
+      return;
+    }
+    const draggedTask = tasks.find(t => t.id === draggedId);
+    const targetTask = tasks.find(t => t.id === targetTaskId);
+    if (!draggedTask || !targetTask) return;
+    const groupId = targetTask.group_id;
+    const groupTasks = tasks.filter(t => t.group_id === groupId).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const ids = groupTasks.map(t => t.id).filter(id => id !== draggedId);
+    const targetIndex = ids.indexOf(targetTaskId);
+    const insertIndex = reorderDropPosition === 'before' ? targetIndex : targetIndex + 1;
+    ids.splice(insertIndex, 0, draggedId);
+    if (draggedTask.group_id !== groupId) {
+      moveTask(draggedId, groupId, insertIndex).then(() => reorderTasks(groupId, ids));
+    } else {
+      reorderTasks(groupId, ids);
+    }
+    setReorderDragTaskId(null);
+    setReorderDropTargetId(null);
+  };
+
+  const handleReorderDragEnd = () => {
+    setReorderDragTaskId(null);
+    setReorderDropTargetId(null);
+  };
+
+  const moveTaskUp = async (task: Task) => {
+    const groupTasks = tasks.filter(t => t.group_id === task.group_id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const idx = groupTasks.findIndex(t => t.id === task.id);
+    if (idx <= 0) return;
+    const ids = groupTasks.map(t => t.id);
+    [ids[idx - 1], ids[idx]] = [ids[idx], ids[idx - 1]];
+    await reorderTasks(task.group_id, ids);
+  };
+
+  const moveTaskDown = async (task: Task) => {
+    const groupTasks = tasks.filter(t => t.group_id === task.group_id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const idx = groupTasks.findIndex(t => t.id === task.id);
+    if (idx < 0 || idx >= groupTasks.length - 1) return;
+    const ids = groupTasks.map(t => t.id);
+    [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
+    await reorderTasks(task.group_id, ids);
   };
 
   const handleSidebarDragStart = (e: React.DragEvent, taskId: number) => {
@@ -948,8 +1031,6 @@ export default function App() {
               addDependency(dragging.taskId, currentLinkMode.fromTaskId);
             }
             setLinkMode(null);
-          } else {
-            setDetailModal({ taskId: dragging.taskId });
           }
         }
       }
@@ -1038,14 +1119,14 @@ export default function App() {
 
   const sidebarRows: SidebarRow[] = [];
   for (const group of groups) {
-    const groupTasks = tasks.filter(t => t.group_id === group.id);
+    const groupTasks = tasks.filter(t => t.group_id === group.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
     sidebarRows.push({ type: 'group-header', groupId: group.id, groupColor: group.color });
     if (!group.collapsed) {
       groupTasks.forEach(task => sidebarRows.push({ type: 'task', task, groupId: group.id, groupColor: group.color }));
     }
   }
   sidebarRows.push({ type: 'ungrouped-header', groupId: null });
-  const ungroupedTasks = tasks.filter(t => !t.group_id);
+  const ungroupedTasks = tasks.filter(t => !t.group_id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
   ungroupedTasks.forEach(task => sidebarRows.push({ type: 'task', task }));
 
   const getTaskRects = () => {
@@ -1590,6 +1671,17 @@ export default function App() {
                           onClick={(e) => {
                             e.stopPropagation();
                             e.preventDefault();
+                            addTask(group.id);
+                          }}
+                          className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-green-500 p-0.5"
+                          title="Agregar tarea al grupo"
+                        >
+                          <TbPlus size={11} />
+                        </button>
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            e.preventDefault();
                             const rect = e.currentTarget.getBoundingClientRect();
                             setGroupContextMenu({ x: rect.left, y: rect.bottom, groupId: group.id });
                             setGroupColorPickerFor(null);
@@ -1668,20 +1760,31 @@ export default function App() {
                 return (
                   <div key={task.id} className="flex border-b" style={{ height: ROW_HEIGHT, borderBottom: `1px solid ${borderColor}` }}>
                     <div
-                      className="flex-shrink-0 border-r flex items-center px-2 gap-1 cursor-pointer sticky left-0"
+                      className="flex-shrink-0 border-r flex items-center px-1 gap-1 cursor-pointer sticky left-0"
                       style={{
                         width: sidebarWidth,
                         borderColor,
-                        backgroundColor: sidebarDragHighlight(row.groupId ?? null) ? hexToRgba(groupColor, 0.25) : groupBg,
+                        backgroundColor: reorderDropTargetId === task.id
+                          ? hexToRgba(bgColor, 0.15)
+                          : sidebarDragHighlight(row.groupId ?? null)
+                            ? hexToRgba(groupColor, 0.25)
+                            : groupBg,
                         borderLeft: `3px solid ${groupColor}`,
+                        borderTop: reorderDropTargetId === task.id && reorderDropPosition === 'before' ? '2px solid #2196f3' : undefined,
+                        borderBottom: reorderDropTargetId === task.id && reorderDropPosition === 'after' ? '2px solid #2196f3' : undefined,
                         transition: 'background-color 0.15s ease, opacity 0.15s ease',
                         zIndex: 20,
+                        opacity: reorderDragTaskId === task.id ? 0.4 : 1,
                       }}
                       draggable
-                      onDragStart={(e) => handleSidebarDragStart(e, task.id)}
-                      onDragEnd={handleSidebarDragEnd}
+                      onDragStart={(e) => handleReorderDragStart(e, task.id)}
+                      onDragEnd={handleReorderDragEnd}
+                      onDragOver={(e) => handleReorderDragOver(e, task.id)}
+                      onDrop={(e) => handleReorderDrop(e, task.id)}
                       onContextMenu={(e) => handleContextMenu(e, task.id)}
+                      onDoubleClick={() => setDetailModal({ taskId: task.id })}
                     >
+                      <TbGripVertical size={10} className="flex-shrink-0 cursor-grab text-gray-400" />
                       <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: bgColor }} />
                       <span className="flex-1 text-[11px] font-medium truncate" style={{ color: textPrimary }}>
                         {task.name}
@@ -1735,6 +1838,7 @@ export default function App() {
                           }
                           handleMouseDown(e, task.id, 'move', task.start_date, task.end_date);
                         }}
+                        onDoubleClick={() => setDetailModal({ taskId: task.id })}
                         onMouseEnter={() => setHoveredTask(task.id)}
                         onMouseLeave={() => setHoveredTask(null)}
                         onContextMenu={(e) => handleContextMenu(e, task.id)}
@@ -1842,6 +1946,13 @@ export default function App() {
             </div>
           )}
           <div className="border-t my-1" style={{ borderColor }} />
+          <button className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={() => { moveTaskUp(tasks.find(t => t.id === contextMenu.taskId)!); setContextMenu(null); }}>
+            <TbArrowUp size={14} /> Mover arriba
+          </button>
+          <button className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2" style={{ color: textPrimary }} onClick={() => { moveTaskDown(tasks.find(t => t.id === contextMenu.taskId)!); setContextMenu(null); }}>
+            <TbArrowDown size={14} /> Mover abajo
+          </button>
+          <div className="border-t my-1" style={{ borderColor }} />
           <button className="w-full px-4 py-2 text-left text-xs hover:bg-red-50 text-red-500 flex items-center gap-2" onClick={() => { deleteTask(contextMenu.taskId); setContextMenu(null); }}>
             <TbTrash size={14} /> Eliminar tarea
           </button>
@@ -1850,6 +1961,16 @@ export default function App() {
 
       {groupContextMenu && (
         <div ref={groupContextMenuRef} className="fixed z-50 border rounded-lg shadow-xl py-1 min-w-[200px] anim-context-menu" style={{ left: groupContextMenu.x, top: groupContextMenu.y, backgroundColor: cardBg, borderColor }}>
+          <button
+            className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+            style={{ color: textPrimary }}
+            onClick={() => {
+              addTask(groupContextMenu.groupId);
+              setGroupContextMenu(null);
+            }}
+          >
+            <TbPlus size={14} /> Agregar tarea al grupo
+          </button>
           <button
             className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
             style={{ color: textPrimary }}
@@ -1932,8 +2053,8 @@ export default function App() {
         const task = tasks.find(t => t.id === detailModal.taskId);
         if (!task) return null;
         return (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 anim-overlay" onClick={() => setDetailModal(null)}>
-            <div className="rounded-xl shadow-2xl w-[420px] max-h-[80vh] overflow-y-auto custom-scrollbar anim-modal" style={{ backgroundColor: cardBg }} onClick={(e) => e.stopPropagation()}>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 anim-overlay">
+            <div className="rounded-xl shadow-2xl w-[420px] max-h-[80vh] overflow-y-auto custom-scrollbar anim-modal" style={{ backgroundColor: cardBg }}>
               <div className="px-6 py-4 rounded-t-xl flex items-center justify-between" style={{ backgroundColor: hexToRgba(task.color || '#4caf50', 0.15) }}>
                 <h2 className="text-sm font-bold" style={{ color: darkenColor(task.color || '#4caf50', 0.6) }}>Detalles de la tarea</h2>
                 <button className="text-lg font-bold" style={{ color: textMuted }} onClick={() => setDetailModal(null)}><TbX size={18} /></button>
