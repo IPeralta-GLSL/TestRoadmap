@@ -4,6 +4,7 @@ import http from 'http';
 import { Server } from 'socket.io';
 import Database from 'better-sqlite3';
 import path from 'path';
+import { create } from 'jsondiffpatch';
 
 const app = express();
 const FORGEJO_TOKEN = 'gto_k6skuazpd6n3v354te7yjhsyvr7yzq4lgc4af722qkfpcigfu44a';
@@ -79,6 +80,21 @@ db.exec(`
     FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
   )
 `);
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS task_versions (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    task_id INTEGER NOT NULL,
+    user_id TEXT,
+    timestamp TEXT DEFAULT CURRENT_TIMESTAMP,
+    change_type TEXT NOT NULL,
+    diff TEXT,
+    snapshot TEXT NOT NULL,
+    FOREIGN KEY (task_id) REFERENCES tasks(id) ON DELETE CASCADE
+  )
+`);
+
+const presenceMap = new Map<string, any>();
 
 const migrateTasks = () => {
   const cols = db.prepare("PRAGMA table_info(tasks)").all() as { name: string }[];
@@ -217,6 +233,15 @@ const getTaskWithRelations = (id: string | number) => {
   };
 };
 
+const saveTaskVersion = (taskId: number, changeType: string, diff: any, snapshot: any, userId?: string) => {
+  const stmt = db.prepare('INSERT INTO task_versions (task_id, user_id, change_type, diff, snapshot) VALUES (?, ?, ?, ?, ?)');
+  stmt.run(taskId, userId || null, changeType, diff ? JSON.stringify(diff) : null, JSON.stringify(snapshot));
+};
+
+const diffpatch = create({
+  objectHash: (obj: any) => obj && obj.id ? String(obj.id) : JSON.stringify(obj),
+});
+
 app.get('/api/tasks', (_req, res) => {
   try {
     const tasks = db.prepare('SELECT * FROM tasks').all() as any[];
@@ -248,6 +273,11 @@ app.post('/api/tasks', (req, res) => {
 
     io.emit('task-created', taskWithDeps);
 
+    try {
+      const diff = diffpatch.diff(null, taskWithDeps);
+      saveTaskVersion(result.lastInsertRowid as number, 'create', diff, taskWithDeps);
+    } catch (e) {}
+
     res.status(201).json(taskWithDeps);
   } catch (error) {
     res.status(500).json({ error: 'Error creating task' });
@@ -258,6 +288,7 @@ app.put('/api/tasks/:id', (req, res) => {
   try {
     const { id } = req.params;
     const { name, start_date, end_date, estimate, color, status, notes, group_id } = req.body;
+    const before = getTaskWithRelations(id);
     const stmt = db.prepare(
       'UPDATE tasks SET name = ?, start_date = ?, end_date = ?, estimate = ?, color = ?, status = ?, notes = ?, group_id = ? WHERE id = ?'
     );
@@ -266,6 +297,10 @@ app.put('/api/tasks/:id', (req, res) => {
 
     if (taskWithDeps) {
       io.emit('task-updated', taskWithDeps);
+      try {
+        const diff = diffpatch.diff(before, taskWithDeps);
+        saveTaskVersion(parseInt(String(id)), 'update', diff, taskWithDeps);
+      } catch (e) {}
     }
 
     res.json(taskWithDeps);
@@ -277,6 +312,11 @@ app.put('/api/tasks/:id', (req, res) => {
 app.delete('/api/tasks/:id', (req, res) => {
   try {
     const { id } = req.params;
+    const snapshot = getTaskWithRelations(id);
+    try {
+      const diff = snapshot ? diffpatch.diff(snapshot, null) : null;
+      if (snapshot) saveTaskVersion(parseInt(String(id)), 'delete', diff, snapshot);
+    } catch (e) {}
     db.prepare('DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_id = ?').run(id, id);
     db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
 
@@ -285,6 +325,97 @@ app.delete('/api/tasks/:id', (req, res) => {
     res.json({ message: 'Task deleted' });
   } catch (error) {
     res.status(500).json({ error: 'Error deleting task' });
+  }
+});
+
+app.get('/api/tasks/:id/versions', (req, res) => {
+  try {
+    const { id } = req.params;
+    const rows = db.prepare('SELECT id, task_id, user_id, timestamp, change_type FROM task_versions WHERE task_id = ? ORDER BY timestamp DESC').all(id);
+    res.json(rows);
+  } catch (error) {
+    res.status(500).json({ error: 'Error fetching versions' });
+  }
+});
+
+app.get('/api/tasks/versions/all', (req, res) => {
+  try {
+    const rows = db.prepare('SELECT * FROM task_versions ORDER BY timestamp DESC LIMIT 200').all() as any[];
+    const parsed = rows.map(r => ({
+      ...r,
+      diff: r.diff ? JSON.parse(r.diff) : null,
+      snapshot: r.snapshot ? JSON.parse(r.snapshot) : null,
+    }));
+    res.json(parsed);
+  } catch (error) {
+    res.status(500).json({ error: 'Error fetching global versions' });
+  }
+});
+
+app.get('/api/tasks/:id/versions/:vid', (req, res) => {
+  try {
+    const { id, vid } = req.params;
+    const v = db.prepare('SELECT * FROM task_versions WHERE id = ? AND task_id = ?').get(vid, id) as any;
+    if (!v) {
+      res.status(404).json({ error: 'Version not found' });
+      return;
+    }
+    const out = {
+      id: v.id,
+      task_id: v.task_id,
+      user_id: v.user_id,
+      timestamp: v.timestamp,
+      change_type: v.change_type,
+      diff: v.diff ? JSON.parse(v.diff) : null,
+      snapshot: v.snapshot ? JSON.parse(v.snapshot) : null
+    };
+    res.json(out);
+  } catch (error) {
+    res.status(500).json({ error: 'Error fetching version' });
+  }
+});
+
+app.post('/api/tasks/:id/versions/:vid/restore', (req, res) => {
+  try {
+    const { id, vid } = req.params;
+    const v = db.prepare('SELECT * FROM task_versions WHERE id = ? AND task_id = ?').get(vid, id) as any;
+    if (!v) {
+      res.status(404).json({ error: 'Version not found' });
+      return;
+    }
+    const snapshot = JSON.parse(v.snapshot) as any;
+    db.transaction(() => {
+      const t = snapshot;
+      const upsert = db.prepare('REPLACE INTO tasks (id, name, start_date, end_date, estimate, color, status, notes, group_id, position) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      upsert.run(t.id, t.name, t.start_date, t.end_date, t.estimate || null, t.color || '#4caf50', t.status || 'pendiente', t.notes || '', t.group_id || null, t.position ?? 0);
+      db.prepare('DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_id = ?').run(t.id, t.id);
+      if (Array.isArray(t.dependencies)) {
+        const insDep = db.prepare('INSERT INTO task_dependencies (task_id, depends_on_id) VALUES (?, ?)');
+        t.dependencies.forEach((d: number) => insDep.run(t.id, d));
+      }
+      db.prepare('DELETE FROM task_attachments WHERE task_id = ?').run(t.id);
+      if (Array.isArray(t.attachments)) {
+        const insAtt = db.prepare('INSERT INTO task_attachments (task_id, file_name, file_type, file_data) VALUES (?, ?, ?, ?)');
+        t.attachments.forEach((a: any) => insAtt.run(t.id, a.file_name, a.file_type, a.file_data));
+      }
+      db.prepare('DELETE FROM task_forgejo_links WHERE task_id = ?').run(t.id);
+      if (Array.isArray(t.forgejo_links)) {
+        const insLink = db.prepare('INSERT INTO task_forgejo_links (task_id, type, title, url, repo_name, item_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)');
+        t.forgejo_links.forEach((l: any) => insLink.run(t.id, l.type, l.title, l.url, l.repo_name, l.item_id || null, l.created_at || null));
+      }
+    })();
+
+    const task = getTaskWithRelations(id);
+    if (task) {
+      try {
+        saveTaskVersion(parseInt(String(id)), 'restore', { from_version: vid }, task);
+      } catch (e) {}
+      io.emit('task-updated', task);
+    }
+
+    res.json({ message: 'Task restored', task });
+  } catch (error) {
+    res.status(500).json({ error: 'Error restoring version' });
   }
 });
 
@@ -704,7 +835,20 @@ app.get('/{*path}', (_req, res) => {
 io.on('connection', (socket) => {
   console.log('Client connected:', socket.id);
 
+  socket.on('presence:join', (p) => {
+    presenceMap.set(socket.id, { socketId: socket.id, ...p });
+    io.emit('presence:state', Array.from(presenceMap.values()));
+  });
+
+  socket.on('presence:update', (p) => {
+    const existing = presenceMap.get(socket.id) || {};
+    presenceMap.set(socket.id, { socketId: socket.id, ...existing, ...p });
+    io.emit('presence:state', Array.from(presenceMap.values()));
+  });
+
   socket.on('disconnect', () => {
+    presenceMap.delete(socket.id);
+    io.emit('presence:state', Array.from(presenceMap.values()));
     console.log('Client disconnected:', socket.id);
   });
 });

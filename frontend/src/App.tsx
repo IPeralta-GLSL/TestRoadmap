@@ -1,8 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload, TbChevronDown, TbChevronLeft, TbChevronRight, TbFolder, TbSun, TbMoon, TbAlertTriangle, TbSettings } from 'react-icons/tb';
+import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload, TbChevronDown, TbChevronLeft, TbChevronRight, TbFolder, TbSun, TbMoon, TbAlertTriangle, TbSettings, TbClock } from 'react-icons/tb';
 import { Task, Attachment, TaskGroup } from './types/Task';
 import Viewer3D from './components/Viewer3D';
+import GlobalHistory from './components/GlobalHistory';
+import PresenceIndicator from './components/PresenceIndicator';
 import { addDays, format, parseISO, differenceInDays, startOfWeek, isSameDay } from 'date-fns';
 import { es } from 'date-fns/locale';
 import * as XLSX from 'xlsx';
@@ -245,6 +247,7 @@ export default function App() {
   const [hoveredTask, setHoveredTask] = useState<number | null>(null);
   const [sidebarDragTaskId, setSidebarDragTaskId] = useState<number | null>(null);
   const [sidebarDragOverGroupId, setSidebarDragOverGroupId] = useState<number | null | 'ungrouped'>('ungrouped');
+  const [showGlobalHistory, setShowGlobalHistory] = useState(false);
 
   const [history, setHistory] = useState<Task[][]>([[]]);
   const [historyIdx, setHistoryIdx] = useState(0);
@@ -1322,6 +1325,7 @@ export default function App() {
 
       <div className="flex items-center justify-between px-4 py-2 border-b" style={{ borderColor, backgroundColor: cardBg }}>
         <div className="flex items-center gap-2">
+          <PresenceIndicator />
           <div ref={projectDropdownRef} className="relative">
             <button
               className="px-3 py-1 text-xs rounded hover:opacity-80 transition-colors flex items-center gap-1 font-medium"
@@ -1435,6 +1439,14 @@ export default function App() {
               <button onClick={() => setLinkMode(null)} className="ml-2 text-orange-800 font-bold">✕</button>
             </span>
           )}
+          <button
+            onClick={() => setShowGlobalHistory(true)}
+            className="px-2 py-1 text-xs rounded hover:opacity-80 transition-colors"
+            style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0', color: textPrimary }}
+            title="Ver historial de cambios"
+          >
+            <TbClock size={16} />
+          </button>
           <button
             onClick={toggleTheme}
             className="px-2 py-1 text-xs rounded hover:opacity-80 transition-colors"
@@ -2189,6 +2201,8 @@ export default function App() {
           </div>
         );
       })()}
+
+      <GlobalHistory isOpen={showGlobalHistory} onClose={() => setShowGlobalHistory(false)} />
     </div>
   );
 }
