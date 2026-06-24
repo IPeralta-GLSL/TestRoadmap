@@ -81,6 +81,7 @@ const MAX_HISTORY = 50;
 export default function App() {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [groups, setGroups] = useState<TaskGroup[]>([]);
+  const [holidays, setHolidays] = useState<Record<string, string>>({});
   const [viewStart, setViewStart] = useState(() => {
     const d = new Date();
     d.setDate(d.getDate() - 7);
@@ -375,6 +376,21 @@ export default function App() {
 
   const isDark = theme === 'dark';
 
+  const getDayBgColor = (day: Date) => {
+    const dateStr = format(day, 'yyyy-MM-dd');
+    if (holidays[dateStr]) {
+      return isDark ? '#422222' : '#ffebee';
+    }
+    const dayOfWeek = day.getDay();
+    if (dayOfWeek === 0 || dayOfWeek === 6) {
+      return isDark ? '#252525' : '#f0f0f0';
+    }
+    if (dayOfWeek === 2 || dayOfWeek === 4) {
+      return isDark ? '#222222' : '#fafafa';
+    }
+    return isDark ? '#1e1e1e' : '#ffffff';
+  };
+
   const toggleTheme = () => {
     const next = theme === 'light' ? 'dark' : 'light';
     setTheme(next);
@@ -538,6 +554,24 @@ export default function App() {
   useEffect(() => {
     fetchTasks();
     fetchGroups();
+  }, []);
+
+  useEffect(() => {
+    Promise.all([
+      fetch('https://api.argentinadatos.com/v1/feriados/2025').then(res => res.json()),
+      fetch('https://api.argentinadatos.com/v1/feriados/2026').then(res => res.json())
+    ])
+      .then(([f2025, f2026]) => {
+        const merged = [...f2025, ...f2026];
+        const map: Record<string, string> = {};
+        merged.forEach((item: any) => {
+          if (item.fecha && item.nombre) {
+            map[item.fecha] = item.nombre;
+          }
+        });
+        setHolidays(map);
+      })
+      .catch(err => console.error(err));
   }, []);
 
   useEffect(() => {
@@ -1766,7 +1800,8 @@ export default function App() {
               <div className="flex" style={slideStyle}>
                 {calendarDays.map((day, i) => {
                   const dayOfWeek = day.getDay();
-                  const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                  const dateStr = format(day, 'yyyy-MM-dd');
+                  const holidayName = holidays[dateStr];
                   return (
                     <div
                       key={i}
@@ -1774,12 +1809,13 @@ export default function App() {
                       style={{
                         width: dayWidth,
                         borderColor,
-                        backgroundColor: isWeekend ? (isDark ? '#252525' : '#f0f0f0') : subtleBg,
+                        backgroundColor: getDayBgColor(day),
                       }}
+                      title={holidayName || undefined}
                     >
-                      <div className="text-[10px]" style={{ color: textMuted }}>{dayNames[(dayOfWeek + 6) % 7]}</div>
+                      <div className="text-[10px]" style={{ color: holidayName ? (isDark ? '#f87171' : '#b91c1c') : textMuted }}>{dayNames[(dayOfWeek + 6) % 7]}</div>
                       <div className="h-px my-0.5" style={{ backgroundColor: borderColor }} />
-                      <div className="text-[10px] font-medium">{format(day, 'd')}</div>
+                      <div className="text-[10px] font-medium" style={{ color: holidayName ? (isDark ? '#f87171' : '#b91c1c') : undefined }}>{format(day, 'd')}</div>
                     </div>
                   );
                 })}
@@ -1988,8 +2024,8 @@ export default function App() {
 
                     <div className="flex-1 relative" style={slideStyle}>
                       {calendarDays.map((day, i) => {
-                        const dayOfWeek = day.getDay();
-                        const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+                        const dateStr = format(day, 'yyyy-MM-dd');
+                        const holidayName = holidays[dateStr];
                         return (
                           <div
                             key={i}
@@ -1998,8 +2034,9 @@ export default function App() {
                               left: i * dayWidth,
                               width: dayWidth,
                               borderColor,
-                              backgroundColor: isWeekend ? (isDark ? '#252525' : '#f0f0f0') : i % 2 === 0 ? (isDark ? '#1e1e1e' : '#ffffff') : subtleBg,
+                              backgroundColor: getDayBgColor(day),
                             }}
+                            title={holidayName || undefined}
                           />
                         );
                       })}
