@@ -302,6 +302,9 @@ export default function App() {
   }, []);
 
   const moveTask = async (taskId: number, newGroupId: number | null, position: number) => {
+    setTasks(prev =>
+      prev.map(t => (t.id === taskId ? { ...t, group_id: newGroupId, position } : t))
+    );
     try {
       await fetch(`${API_URL}/tasks/move`, {
         method: 'POST',
@@ -315,6 +318,12 @@ export default function App() {
   };
 
   const reorderTasks = async (_groupId: number | null, orderedIds: number[]) => {
+    setTasks(prev =>
+      prev.map(t => {
+        const idx = orderedIds.indexOf(t.id);
+        return idx !== -1 ? { ...t, position: idx } : t;
+      })
+    );
     try {
       await fetch(`${API_URL}/tasks/reorder`, {
         method: 'POST',
@@ -848,6 +857,7 @@ export default function App() {
   };
 
   const updateTask = async (id: number, updates: Partial<Task>) => {
+    setTasks(prev => prev.map(t => (t.id === id ? { ...t, ...updates } : t)));
     try {
       const task = tasks.find(t => t.id === id);
       if (!task) return;
