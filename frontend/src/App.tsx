@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload, TbChevronDown, TbChevronLeft, TbChevronRight, TbFolder, TbSun, TbMoon, TbAlertTriangle, TbSettings, TbClock, TbPlus, TbGripVertical, TbArrowUp, TbArrowDown, TbCheck, TbEye, TbEyeOff } from 'react-icons/tb';
+import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload, TbChevronDown, TbChevronLeft, TbChevronRight, TbFolder, TbSun, TbMoon, TbAlertTriangle, TbSettings, TbClock, TbPlus, TbGripVertical, TbArrowUp, TbArrowDown, TbCheck, TbEye, TbEyeOff, TbCalendar } from 'react-icons/tb';
 import { Task, Attachment, TaskGroup } from './types/Task';
 import Viewer3D from './components/Viewer3D';
 import GlobalHistory from './components/GlobalHistory';
@@ -137,6 +137,17 @@ export default function App() {
     }
   };
 
+  const handleDateChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const val = e.target.value;
+    if (!val) return;
+    const nextDate = parseISO(val);
+    if (isNaN(nextDate.getTime())) return;
+    const days = differenceInDays(nextDate, viewStart);
+    if (days !== 0) {
+      shiftViewStart(days);
+    }
+  };
+
   const startRepeating = (e: React.MouseEvent | React.TouchEvent, action: (forceNoAnim: boolean) => void) => {
     e.preventDefault();
     action(false);
@@ -185,16 +196,32 @@ export default function App() {
     if (!isPanning || !panStartViewStartRef.current) return;
 
     const handleMouseMove = (e: MouseEvent) => {
-      if (!panStartViewStartRef.current) return;
       const dx = e.clientX - panStartX;
-      const daysDelta = -Math.round(dx / dayWidth);
-      if (daysDelta !== 0) {
-        setViewStart(addDays(panStartViewStartRef.current, daysDelta));
-      }
+      setAnimateSlide(false);
+      setSlideOffset(dx);
     };
 
-    const handleMouseUp = () => {
+    const handleMouseUp = (e: MouseEvent) => {
       setIsPanning(false);
+      const dx = e.clientX - panStartX;
+      const daysDelta = -Math.round(dx / dayWidth);
+
+      if (daysDelta !== 0 && panStartViewStartRef.current) {
+        setAnimateSlide(false);
+        setViewStart(addDays(panStartViewStartRef.current, daysDelta));
+        setSlideOffset(dx + daysDelta * dayWidth);
+
+        requestAnimationFrame(() => {
+          requestAnimationFrame(() => {
+            setAnimateSlide(true);
+            setSlideOffset(0);
+          });
+        });
+      } else {
+        setAnimateSlide(true);
+        setSlideOffset(0);
+      }
+
       panStartViewStartRef.current = null;
       document.body.style.cursor = '';
       document.body.style.userSelect = '';
@@ -1607,6 +1634,27 @@ export default function App() {
           >
             <TbChevronRight size={14} />
           </button>
+          <div className="w-px h-4 mx-1" style={{ backgroundColor: borderColor }} />
+          <div className="relative flex items-center">
+            <button
+              className="px-2.5 py-1 text-xs rounded hover:opacity-80 transition-colors flex items-center gap-1.5 font-medium border"
+              style={{
+                backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0',
+                color: textPrimary,
+                borderColor: isDark ? '#4a4a4a' : '#d0d0d0',
+              }}
+            >
+              <TbCalendar size={14} />
+              <span>{format(viewStart, 'd MMM yyyy', { locale: es })}</span>
+            </button>
+            <input
+              type="date"
+              value={format(viewStart, 'yyyy-MM-dd')}
+              onChange={handleDateChange}
+              className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
+              title="Ir a una fecha específica"
+            />
+          </div>
         </div>
         <h1 className="text-base font-semibold tracking-tight">Pipeline de Actividad Semanal</h1>
         <div className="flex items-center gap-2">
