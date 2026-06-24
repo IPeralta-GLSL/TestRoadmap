@@ -239,6 +239,8 @@ export default function App() {
   const [dragging, setDragging] = useState<DragState | null>(null);
   const dragDeltaRef = useRef(0);
   const [dragDelta, setDragDelta] = useState(0);
+  const [selectedTaskIds, setSelectedTaskIds] = useState<Set<number>>(new Set());
+  const selectedTaskIdsRef = useRef<Set<number>>(new Set());
   const tasksRef = useRef<Task[]>([]);
   const dayWidthRef = useRef(DAY_WIDTH_DEFAULT);
   const linkModeRef = useRef<{ fromTaskId: number } | null>(null);
@@ -400,6 +402,7 @@ export default function App() {
   useEffect(() => { tasksRef.current = tasks; }, [tasks]);
   useEffect(() => { dayWidthRef.current = dayWidth; }, [dayWidth]);
   useEffect(() => { linkModeRef.current = linkMode; }, [linkMode]);
+  useEffect(() => { selectedTaskIdsRef.current = selectedTaskIds; }, [selectedTaskIds]);
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -645,6 +648,8 @@ export default function App() {
   const addTask = async (groupId?: number | null) => {
     const today = new Date();
     const end = addDays(today, 7);
+    const group = groupId ? groups.find(g => g.id === groupId) : null;
+    const taskColor = group?.color || '#4caf50';
     try {
       await fetch(`${API_URL}/tasks`, {
         method: 'POST',
@@ -654,7 +659,7 @@ export default function App() {
           start_date: format(today, 'yyyy-MM-dd'),
           end_date: format(end, 'yyyy-MM-dd'),
           estimate: '',
-          color: '#4caf50',
+          color: taskColor,
           status: 'pendiente',
           notes: '',
           group_id: groupId || null,
@@ -1151,6 +1156,26 @@ export default function App() {
   ) => {
     e.stopPropagation();
     e.preventDefault();
+
+    // Shift or Ctrl/Cmd click = toggle selection, don't drag yet
+    if ((e.shiftKey || e.ctrlKey || e.metaKey) && type === 'move') {
+      setSelectedTaskIds(prev => {
+        const next = new Set(prev);
+        if (next.has(taskId)) {
+          next.delete(taskId);
+        } else {
+          next.add(taskId);
+        }
+        return next;
+      });
+      return;
+    }
+
+    // Plain click: if task not in selection, clear selection first
+    if (!selectedTaskIdsRef.current.has(taskId)) {
+      setSelectedTaskIds(new Set());
+    }
+
     dragStartRef.current = { x: e.clientX, y: e.clientY, time: Date.now(), button: e.button };
     setDragging({ taskId, type, startX: e.clientX, origStart, origEnd });
   };
@@ -1169,6 +1194,7 @@ export default function App() {
       const currentDayWidth = dayWidthRef.current;
       const currentTasks = tasksRef.current;
       const currentLinkMode = linkModeRef.current;
+      const currentSelection = selectedTaskIdsRef.current;
 
       if (dragStartRef.current) {
         const elapsed = Date.now() - dragStartRef.current.time;
@@ -1189,19 +1215,30 @@ export default function App() {
       if (daysDelta !== 0) {
         const task = currentTasks.find((t) => t.id === dragging.taskId);
         if (task) {
-          let newStart = dragging.origStart;
-          let newEnd = dragging.origEnd;
+          // If dragging a selected task and there are multiple selected, move all
+          const isMultiDrag = currentSelection.size > 1 && currentSelection.has(dragging.taskId) && dragging.type === 'move';
+          if (isMultiDrag) {
+            const tasksToMove = currentTasks.filter(t => currentSelection.has(t.id));
+            tasksToMove.forEach(t => {
+              const newStart = format(addDays(parseISO(t.start_date), daysDelta), 'yyyy-MM-dd');
+              const newEnd = format(addDays(parseISO(t.end_date), daysDelta), 'yyyy-MM-dd');
+              updateTask(t.id, { start_date: newStart, end_date: newEnd });
+            });
+          } else {
+            let newStart = dragging.origStart;
+            let newEnd = dragging.origEnd;
 
-          if (dragging.type === 'move') {
-            newStart = format(addDays(parseISO(dragging.origStart), daysDelta), 'yyyy-MM-dd');
-            newEnd = format(addDays(parseISO(dragging.origEnd), daysDelta), 'yyyy-MM-dd');
-          } else if (dragging.type === 'resize-left') {
-            newStart = format(addDays(parseISO(dragging.origStart), daysDelta), 'yyyy-MM-dd');
-          } else if (dragging.type === 'resize-right') {
-            newEnd = format(addDays(parseISO(dragging.origEnd), daysDelta), 'yyyy-MM-dd');
+            if (dragging.type === 'move') {
+              newStart = format(addDays(parseISO(dragging.origStart), daysDelta), 'yyyy-MM-dd');
+              newEnd = format(addDays(parseISO(dragging.origEnd), daysDelta), 'yyyy-MM-dd');
+            } else if (dragging.type === 'resize-left') {
+              newStart = format(addDays(parseISO(dragging.origStart), daysDelta), 'yyyy-MM-dd');
+            } else if (dragging.type === 'resize-right') {
+              newEnd = format(addDays(parseISO(dragging.origEnd), daysDelta), 'yyyy-MM-dd');
+            }
+
+            updateTask(task.id, { start_date: newStart, end_date: newEnd });
           }
-
-          updateTask(task.id, { start_date: newStart, end_date: newEnd });
         }
       }
       dragDeltaRef.current = 0;
@@ -1325,6 +1362,16 @@ export default function App() {
       if (row.type === 'task' && row.task?.id === taskId) return y;
       y += row.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT;
     }
+    // If task not found in sidebarRows, it might be in a collapsed group.
+    // Return the Y of the group-header row for that task's group.
+    const task = tasks.find(t => t.id === taskId);
+    if (task?.group_id) {
+      let gy = 0;
+      for (const row of sidebarRows) {
+        if (row.type === 'group-header' && row.groupId === task.group_id) return gy;
+        gy += row.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT;
+      }
+    }
     return 0;
   };
 
@@ -1351,43 +1398,45 @@ export default function App() {
     tasks.forEach(task => {
       if (!task.dependencies || task.dependencies.length === 0) return;
       if (hideCompletedInCalendar && task.status === 'completada') return;
+
+      // Check if destination task (task) is visible or in a collapsed group
       const taskRect = rects.find(r => r.task.id === task.id);
-      if (!taskRect) {
-        const group = task.group_id ? groups.find(g => g.id === task.group_id) : null;
-        if (!group || !group.collapsed) return;
-        return;
-      }
+      const taskCollapsedRect = !taskRect ? getTaskGroupRect(task) : null;
+
+      // Skip if destination is neither visible nor in a collapsed group
+      if (!taskRect && !taskCollapsedRect) return;
+
       const taskY = getTaskY(task.id);
+      const toX = taskRect ? taskRect.left + 2 : (taskCollapsedRect ? taskCollapsedRect.left + 2 : 0);
+      const toY = taskY + (GROUP_HEADER_HEIGHT / 2);
 
       task.dependencies.forEach(depId => {
         const depTask = tasks.find(t => t.id === depId);
         if (!depTask) return;
         if (hideCompletedInCalendar && depTask.status === 'completada') return;
+
         let depRect = rects.find(r => r.task.id === depId);
+        let fromX: number;
+        let fromY: number;
+
         if (!depRect) {
+          // Source dependency is in a collapsed group
           const collapsedRect = getTaskGroupRect(depTask);
-          if (collapsedRect) {
-            const depY = getTaskY(depId);
-            const fromX = collapsedRect.left + collapsedRect.width - 2;
-            const fromY = depY + 8 + (ROW_HEIGHT - 16) / 2;
-            const toX = taskRect.left + 2;
-            const toY = taskY + 8 + (ROW_HEIGHT - 16) / 2;
-            const midX = fromX + (toX - fromX) / 2;
-            arrows.push(
-              <path key={`arrow-${task.id}-${depId}`} d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`} stroke={darkenColor(task.color || '#4caf50', 0.6)} strokeWidth={2} fill="none" markerEnd={`url(#arrowhead-${task.id})`} />
-            );
-          }
-          return;
+          if (!collapsedRect) return;
+          const depY = getTaskY(depId);
+          fromX = collapsedRect.left + collapsedRect.width - 2;
+          fromY = depY + (GROUP_HEADER_HEIGHT / 2);
+        } else {
+          const depY = getTaskY(depId);
+          fromX = depRect.left + depRect.width - 2;
+          fromY = depY + 8 + (ROW_HEIGHT - 16) / 2;
         }
-        const depY = getTaskY(depId);
-        const fromX = depRect.left + depRect.width - 2;
-        const fromY = depY + 8 + (ROW_HEIGHT - 16) / 2;
-        const toX = taskRect.left + 2;
-        const toY = taskY + 8 + (ROW_HEIGHT - 16) / 2;
+
+        const finalToY = taskRect ? taskY + 8 + (ROW_HEIGHT - 16) / 2 : toY;
         const midX = fromX + (toX - fromX) / 2;
 
         arrows.push(
-          <path key={`arrow-${task.id}-${depId}`} d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${toY}, ${toX} ${toY}`} stroke={darkenColor(task.color || '#4caf50', 0.6)} strokeWidth={2} fill="none" markerEnd={`url(#arrowhead-${task.id})`} />
+          <path key={`arrow-${task.id}-${depId}`} d={`M ${fromX} ${fromY} C ${midX} ${fromY}, ${midX} ${finalToY}, ${toX} ${finalToY}`} stroke={darkenColor(task.color || '#4caf50', 0.6)} strokeWidth={2} fill="none" markerEnd={`url(#arrowhead-${task.id})`} />
         );
       });
     });
@@ -1562,7 +1611,6 @@ export default function App() {
 
       <div className="flex items-center justify-between px-4 py-2 border-b" style={{ borderColor, backgroundColor: cardBg }}>
         <div className="flex items-center gap-2">
-          <PresenceIndicator isDark={isDark} textPrimary={textPrimary} cardBg={cardBg} borderColor={borderColor} />
           <div ref={projectDropdownRef} className="relative">
             <button
               className="px-3 py-1 text-xs rounded hover:opacity-80 transition-colors flex items-center gap-1 font-medium"
@@ -1607,6 +1655,7 @@ export default function App() {
               </div>
             )}
           </div>
+          <PresenceIndicator isDark={isDark} textPrimary={textPrimary} cardBg={cardBg} borderColor={borderColor} />
           <div className="w-px h-4 mx-1" style={{ backgroundColor: borderColor }} />
           <button
             onClick={() => setDayWidth(Math.max(DAY_WIDTH_MIN, dayWidth - 15))}
@@ -1822,7 +1871,12 @@ export default function App() {
               </div>
             </div>
 
-            <div className="relative">
+            <div className="relative" onClick={(e) => {
+              // Clear selection if clicking on the background (not on a task bar)
+              if ((e.target as HTMLElement).closest('.select-none') === null) {
+                setSelectedTaskIds(new Set());
+              }
+            }}>
               {sidebarRows.map((row) => {
                 if (row.type === 'group-header') {
                   const group = groups.find(g => g.id === row.groupId);
@@ -1837,6 +1891,7 @@ export default function App() {
                         height: GROUP_HEADER_HEIGHT,
                         borderBottom: `1px solid ${isDark ? borderColor : '#9c9c9c'}`,
                         backgroundColor: sidebarDragHighlight(group.id) ? hexToRgba(group.color, 0.25) : subtleBg,
+                        transition: 'background-color 0.3s ease, border-color 0.3s ease',
                       }}
                       onDragOver={(e) => handleGroupDragOver(e, group.id)}
                       onDrop={(e) => handleGroupDrop(e, group.id)}
@@ -1844,7 +1899,7 @@ export default function App() {
                     >
                       <div
                         className="flex-shrink-0 border-r flex items-center px-2 gap-1 sticky left-0 group"
-                        style={{ width: sidebarWidth, borderColor: isDark ? borderColor : '#9c9c9c', borderLeft: `3px solid ${group.color}`, backgroundColor: subtleBg, zIndex: 25 }}
+                        style={{ width: sidebarWidth, borderColor: isDark ? borderColor : '#9c9c9c', borderLeft: `3px solid ${group.color}`, backgroundColor: subtleBg, zIndex: 25, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}
                         onContextMenu={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
@@ -2006,12 +2061,13 @@ export default function App() {
                 const isInvalid = hasInvalidDependencies(task);
                 const errorMsg = isInvalid ? getDependencyErrorMessageForTask(task) : null;
                 const isHovered = hoveredTask === task.id;
+                const isSelected = selectedTaskIds.has(task.id);
                 const group = row.groupId ? groups.find(g => g.id === row.groupId) : null;
                 const groupColor = group?.color || '#888';
                 const groupBg = cardBg;
 
                 return (
-                  <div key={task.id} className="flex border-b" style={{ height: ROW_HEIGHT, borderBottom: `1px solid ${isDark ? borderColor : '#9c9c9c'}` }}>
+                  <div key={task.id} className="flex border-b" style={{ height: ROW_HEIGHT, borderBottom: `1px solid ${isDark ? borderColor : '#9c9c9c'}`, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
                     <div
                       className="flex-shrink-0 border-r flex items-center px-1 gap-1 cursor-pointer sticky left-0"
                       style={{
@@ -2084,11 +2140,11 @@ export default function App() {
                             top: 8,
                             height: ROW_HEIGHT - 16,
                             backgroundColor: bgColor,
-                            border: isLinkTarget ? '2px dashed #ff9800' : isInvalid ? '2px solid #f44336' : `1px solid ${darkenColor(bgColor, 0.7)}`,
+                            border: isSelected ? '2px solid #2196f3' : isLinkTarget ? '2px dashed #ff9800' : isInvalid ? '2px solid #f44336' : `1px solid ${darkenColor(bgColor, 0.7)}`,
                             cursor: dragging && dragging.taskId === task.id ? 'grabbing' : linkMode ? 'pointer' : 'grab',
                             zIndex: dragging && dragging.taskId === task.id ? 10 : 2,
                             opacity: linkMode && !isLinkTarget ? 0.6 : task.status === 'completada' ? 0.6 : 1,
-                            boxShadow: isInvalid ? '0 0 8px rgba(244, 67, 54, 0.6)' : isHovered ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
+                            boxShadow: isSelected ? '0 0 0 2px rgba(33,150,243,0.5)' : isInvalid ? '0 0 8px rgba(244, 67, 54, 0.6)' : isHovered ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
                             transform: isHovered && !(dragging && dragging.taskId === task.id) ? 'scaleY(1.08)' : 'scaleY(1)',
                             transition: 'transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease',
                           }}
