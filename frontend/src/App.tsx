@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { io, Socket } from 'socket.io-client';
-import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload, TbChevronDown, TbChevronLeft, TbChevronRight, TbFolder, TbSun, TbMoon, TbAlertTriangle, TbSettings, TbClock, TbPlus, TbGripVertical, TbArrowUp, TbArrowDown } from 'react-icons/tb';
+import { TbX, TbFileText, TbPalette, TbLink, TbTrash, TbArrowBackUp, TbArrowForwardUp, TbPhoto, TbPaperclip, TbDownload, TbChevronDown, TbChevronLeft, TbChevronRight, TbFolder, TbSun, TbMoon, TbAlertTriangle, TbSettings, TbClock, TbPlus, TbGripVertical, TbArrowUp, TbArrowDown, TbCheck, TbEye, TbEyeOff } from 'react-icons/tb';
 import { Task, Attachment, TaskGroup } from './types/Task';
 import Viewer3D from './components/Viewer3D';
 import GlobalHistory from './components/GlobalHistory';
@@ -245,12 +245,14 @@ export default function App() {
     return (localStorage.getItem('roadmapper-theme') as 'light' | 'dark') || 'light';
   });
   const [hoveredTask, setHoveredTask] = useState<number | null>(null);
-  const [sidebarDragTaskId, setSidebarDragTaskId] = useState<number | null>(null);
   const [sidebarDragOverGroupId, setSidebarDragOverGroupId] = useState<number | null | 'ungrouped'>('ungrouped');
   const [reorderDragTaskId, setReorderDragTaskId] = useState<number | null>(null);
   const [reorderDropTargetId, setReorderDropTargetId] = useState<number | null>(null);
   const [reorderDropPosition, setReorderDropPosition] = useState<'before' | 'after'>('after');
   const [showGlobalHistory, setShowGlobalHistory] = useState(false);
+  const [hideCompletedInCalendar, setHideCompletedInCalendar] = useState<boolean>(() => {
+    return localStorage.getItem('hideCompletedInCalendar') === 'true';
+  });
 
   const [history, setHistory] = useState<Task[][]>([[]]);
   const [historyIdx, setHistoryIdx] = useState(0);
@@ -312,7 +314,7 @@ export default function App() {
     }
   };
 
-  const reorderTasks = async (groupId: number | null, orderedIds: number[]) => {
+  const reorderTasks = async (_groupId: number | null, orderedIds: number[]) => {
     try {
       await fetch(`${API_URL}/tasks/reorder`, {
         method: 'POST',
@@ -326,6 +328,7 @@ export default function App() {
   };
 
   const handleReorderDragStart = (e: React.DragEvent, taskId: number) => {
+    e.dataTransfer.setData('text/plain', String(taskId));
     e.dataTransfer.setData('text/reorder', String(taskId));
     e.dataTransfer.effectAllowed = 'move';
     setReorderDragTaskId(taskId);
@@ -372,6 +375,7 @@ export default function App() {
   const handleReorderDragEnd = () => {
     setReorderDragTaskId(null);
     setReorderDropTargetId(null);
+    setSidebarDragOverGroupId('ungrouped');
   };
 
   const moveTaskUp = async (task: Task) => {
@@ -392,17 +396,6 @@ export default function App() {
     await reorderTasks(task.group_id, ids);
   };
 
-  const handleSidebarDragStart = (e: React.DragEvent, taskId: number) => {
-    e.dataTransfer.setData('text/plain', String(taskId));
-    e.dataTransfer.effectAllowed = 'move';
-    setSidebarDragTaskId(taskId);
-  };
-
-  const handleSidebarDragEnd = () => {
-    setSidebarDragTaskId(null);
-    setSidebarDragOverGroupId('ungrouped');
-  };
-
   const handleGroupDrop = (e: React.DragEvent, groupId: number | null) => {
     e.preventDefault();
     const taskId = parseInt(e.dataTransfer.getData('text/plain'));
@@ -410,7 +403,7 @@ export default function App() {
     const existingInTarget = tasks.filter(t => t.group_id === groupId && t.id !== taskId);
     const maxPos = existingInTarget.reduce((max, t) => Math.max(max, t.position ?? 0), -1);
     moveTask(taskId, groupId, maxPos + 1);
-    setSidebarDragTaskId(null);
+    setReorderDragTaskId(null);
     setSidebarDragOverGroupId('ungrouped');
   };
 
@@ -1194,6 +1187,7 @@ export default function App() {
 
     tasks.forEach(task => {
       if (!task.dependencies || task.dependencies.length === 0) return;
+      if (hideCompletedInCalendar && task.status === 'completada') return;
       const taskRect = rects.find(r => r.task.id === task.id);
       if (!taskRect) {
         const group = task.group_id ? groups.find(g => g.id === task.group_id) : null;
@@ -1203,10 +1197,11 @@ export default function App() {
       const taskY = getTaskY(task.id);
 
       task.dependencies.forEach(depId => {
+        const depTask = tasks.find(t => t.id === depId);
+        if (!depTask) return;
+        if (hideCompletedInCalendar && depTask.status === 'completada') return;
         let depRect = rects.find(r => r.task.id === depId);
         if (!depRect) {
-          const depTask = tasks.find(t => t.id === depId);
-          if (!depTask) return;
           const collapsedRect = getTaskGroupRect(depTask);
           if (collapsedRect) {
             const depY = getTaskY(depId);
@@ -1221,8 +1216,6 @@ export default function App() {
           }
           return;
         }
-        const depTask = tasks.find(t => t.id === depId);
-        if (!depTask) return;
         const depY = getTaskY(depId);
         const fromX = depRect.left + depRect.width - 2;
         const fromY = depY + 8 + (ROW_HEIGHT - 16) / 2;
@@ -1384,7 +1377,7 @@ export default function App() {
   const textMuted = isDark ? '#666666' : '#999999';
 
   const sidebarDragHighlight = (groupId: number | null) =>
-    sidebarDragOverGroupId === groupId && sidebarDragTaskId !== null;
+    sidebarDragOverGroupId === groupId && reorderDragTaskId !== null;
 
   return (
     <div className="h-screen flex flex-col" style={{ backgroundColor: tBg, color: textPrimary, transition: 'background-color 0.3s ease, color 0.3s ease' }}>
@@ -1520,6 +1513,33 @@ export default function App() {
               <button onClick={() => setLinkMode(null)} className="ml-2 text-orange-800 font-bold">✕</button>
             </span>
           )}
+          <button
+            onClick={() => {
+              const val = !hideCompletedInCalendar;
+              setHideCompletedInCalendar(val);
+              localStorage.setItem('hideCompletedInCalendar', String(val));
+            }}
+            className="px-2.5 py-1 text-xs rounded hover:opacity-80 transition-colors flex items-center gap-1.5 font-medium"
+            style={{
+              backgroundColor: hideCompletedInCalendar
+                ? (isDark ? '#1b5e20' : '#e8f5e9')
+                : (isDark ? '#3a3a3a' : '#e0e0e0'),
+              color: hideCompletedInCalendar
+                ? (isDark ? '#a5d6a7' : '#2e7d32')
+                : textPrimary,
+              border: hideCompletedInCalendar
+                ? `1px solid ${isDark ? '#2e7d32' : '#c8e6c9'}`
+                : `1px solid transparent`
+            }}
+            title={hideCompletedInCalendar ? "Mostrar completadas en el calendario" : "Ocultar completadas del calendario"}
+          >
+            {hideCompletedInCalendar ? (
+              <TbEyeOff size={15} style={{ color: isDark ? '#a5d6a7' : '#2e7d32' }} />
+            ) : (
+              <TbEye size={15} style={{ color: isDark ? '#9e9e9e' : '#616161' }} />
+            )}
+            <span>{hideCompletedInCalendar ? "Completadas ocultas" : "Ocultar completadas"}</span>
+          </button>
           <button
             onClick={() => setShowGlobalHistory(true)}
             className="px-2 py-1 text-xs rounded hover:opacity-80 transition-colors"
@@ -1693,8 +1713,10 @@ export default function App() {
                         </button>
                       </div>
                       <div className="flex-1 relative" style={slideStyle}>
-                        {group.collapsed && collapsedGroupTasks.map(ct => {
-                          const sIdx = getDayIndex(ct.start_date, viewStart);
+                        {group.collapsed && collapsedGroupTasks
+                          .filter(ct => !(hideCompletedInCalendar && ct.status === 'completada'))
+                          .map(ct => {
+                            const sIdx = getDayIndex(ct.start_date, viewStart);
                           const eIdx = getDayIndex(ct.end_date, viewStart);
                           const dur = eIdx - sIdx;
                           const ctLeft = sIdx * dayWidth;
@@ -1785,8 +1807,19 @@ export default function App() {
                       onDoubleClick={() => setDetailModal({ taskId: task.id })}
                     >
                       <TbGripVertical size={10} className="flex-shrink-0 cursor-grab text-gray-400" />
-                      <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: bgColor }} />
-                      <span className="flex-1 text-[11px] font-medium truncate" style={{ color: textPrimary }}>
+                      {task.status === 'completada' ? (
+                        <TbCheck size={12} className="flex-shrink-0 font-bold" style={{ color: isDark ? '#4caf50' : '#2e7d32' }} />
+                      ) : (
+                        <div className="w-2 h-2 rounded-full flex-shrink-0" style={{ backgroundColor: bgColor }} />
+                      )}
+                      <span
+                        className="flex-1 text-[11px] font-medium truncate"
+                        style={{
+                          color: textPrimary,
+                          textDecoration: task.status === 'completada' ? 'line-through' : 'none',
+                          opacity: task.status === 'completada' ? 0.65 : 1
+                        }}
+                      >
                         {task.name}
                       </span>
                       <span className="text-[9px] flex-shrink-0" style={{ color: textMuted }}>{task.estimate || ''}</span>
@@ -1810,60 +1843,62 @@ export default function App() {
                           />
                         );
                       })}
-                      <div
-                        className="absolute rounded-[3px] select-none"
-                        style={{
-                          left: taskLeft + 2,
-                          width: taskWidth - 4,
-                          top: 8,
-                          height: ROW_HEIGHT - 16,
-                          backgroundColor: bgColor,
-                          border: isLinkTarget ? '2px dashed #ff9800' : isInvalid ? '2px solid #f44336' : `1px solid ${darkenColor(bgColor, 0.7)}`,
-                          cursor: dragging && dragging.taskId === task.id ? 'grabbing' : linkMode ? 'pointer' : 'grab',
-                          zIndex: dragging && dragging.taskId === task.id ? 10 : 2,
-                          opacity: linkMode && !isLinkTarget ? 0.6 : 1,
-                          boxShadow: isInvalid ? '0 0 8px rgba(244, 67, 54, 0.6)' : isHovered ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
-                          transform: isHovered && !(dragging && dragging.taskId === task.id) ? 'scaleY(1.08)' : 'scaleY(1)',
-                          transition: 'transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease',
-                        }}
-                        onMouseDown={(e) => {
-                          if (linkMode) {
-                            e.stopPropagation();
-                            e.preventDefault();
-                            if (linkMode.fromTaskId !== task.id) {
-                              addDependency(task.id, linkMode.fromTaskId);
-                              setLinkMode(null);
+                      {!(hideCompletedInCalendar && task.status === 'completada') && (
+                        <div
+                          className="absolute rounded-[3px] select-none"
+                          style={{
+                            left: taskLeft + 2,
+                            width: taskWidth - 4,
+                            top: 8,
+                            height: ROW_HEIGHT - 16,
+                            backgroundColor: bgColor,
+                            border: isLinkTarget ? '2px dashed #ff9800' : isInvalid ? '2px solid #f44336' : `1px solid ${darkenColor(bgColor, 0.7)}`,
+                            cursor: dragging && dragging.taskId === task.id ? 'grabbing' : linkMode ? 'pointer' : 'grab',
+                            zIndex: dragging && dragging.taskId === task.id ? 10 : 2,
+                            opacity: linkMode && !isLinkTarget ? 0.6 : 1,
+                            boxShadow: isInvalid ? '0 0 8px rgba(244, 67, 54, 0.6)' : isHovered ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
+                            transform: isHovered && !(dragging && dragging.taskId === task.id) ? 'scaleY(1.08)' : 'scaleY(1)',
+                            transition: 'transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease',
+                          }}
+                          onMouseDown={(e) => {
+                            if (linkMode) {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              if (linkMode.fromTaskId !== task.id) {
+                                addDependency(task.id, linkMode.fromTaskId);
+                                setLinkMode(null);
+                              }
+                              return;
                             }
-                            return;
-                          }
-                          handleMouseDown(e, task.id, 'move', task.start_date, task.end_date);
-                        }}
-                        onDoubleClick={() => setDetailModal({ taskId: task.id })}
-                        onMouseEnter={() => setHoveredTask(task.id)}
-                        onMouseLeave={() => setHoveredTask(null)}
-                        onContextMenu={(e) => handleContextMenu(e, task.id)}
-                      >
-                        <div className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none">
-                          <span className="text-[10px] font-bold text-white truncate px-1" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}>
-                            {task.name}
-                          </span>
+                            handleMouseDown(e, task.id, 'move', task.start_date, task.end_date);
+                          }}
+                          onDoubleClick={() => setDetailModal({ taskId: task.id })}
+                          onMouseEnter={() => setHoveredTask(task.id)}
+                          onMouseLeave={() => setHoveredTask(null)}
+                          onContextMenu={(e) => handleContextMenu(e, task.id)}
+                        >
+                          <div className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none">
+                            <span className="text-[10px] font-bold text-white truncate px-1" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}>
+                              {task.name}
+                            </span>
+                          </div>
+                          {isInvalid && isHovered && (
+                            <div className="absolute z-20 px-2 py-1 rounded text-[10px] font-medium text-white whitespace-nowrap pointer-events-none"
+                              style={{ bottom: '100%', left: '50%', transform: 'translateX(-50%)', marginBottom: 4, backgroundColor: '#f44336' }}>
+                              <TbAlertTriangle size={10} className="inline mr-1" />{errorMsg}
+                            </div>
+                          )}
+                          {isInvalid && !isHovered && (
+                            <div className="absolute flex items-center justify-center" style={{ top: -4, right: -4, width: 14, height: 14, borderRadius: '50%', backgroundColor: '#f44336', zIndex: 11 }}>
+                              <TbAlertTriangle size={9} className="text-white" />
+                            </div>
+                          )}
+                          <div className="absolute left-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-l-[3px]"
+                            onMouseDown={(e) => { if (!linkMode) handleMouseDown(e, task.id, 'resize-left', task.start_date, task.end_date); }} />
+                          <div className="absolute right-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-r-[3px]"
+                            onMouseDown={(e) => { if (!linkMode) handleMouseDown(e, task.id, 'resize-right', task.start_date, task.end_date); }} />
                         </div>
-                        {isInvalid && isHovered && (
-                          <div className="absolute z-20 px-2 py-1 rounded text-[10px] font-medium text-white whitespace-nowrap pointer-events-none"
-                            style={{ bottom: '100%', left: '50%', transform: 'translateX(-50%)', marginBottom: 4, backgroundColor: '#f44336' }}>
-                            <TbAlertTriangle size={10} className="inline mr-1" />{errorMsg}
-                          </div>
-                        )}
-                        {isInvalid && !isHovered && (
-                          <div className="absolute flex items-center justify-center" style={{ top: -4, right: -4, width: 14, height: 14, borderRadius: '50%', backgroundColor: '#f44336', zIndex: 11 }}>
-                            <TbAlertTriangle size={9} className="text-white" />
-                          </div>
-                        )}
-                        <div className="absolute left-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-l-[3px]"
-                          onMouseDown={(e) => { if (!linkMode) handleMouseDown(e, task.id, 'resize-left', task.start_date, task.end_date); }} />
-                        <div className="absolute right-0 top-0 w-2 h-full cursor-ew-resize hover:bg-black/10 rounded-r-[3px]"
-                          onMouseDown={(e) => { if (!linkMode) handleMouseDown(e, task.id, 'resize-right', task.start_date, task.end_date); }} />
-                      </div>
+                      )}
                     </div>
                   </div>
                 );
