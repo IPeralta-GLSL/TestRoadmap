@@ -1314,17 +1314,17 @@ export default function App() {
     if (hideCompletedInCalendar) {
       groupTasks = groupTasks.filter(t => t.status !== 'completada');
     }
-    sidebarRows.push({ type: 'group-header', groupId: group.id, groupColor: group.color });
+    sidebarRows.push({ type: 'group-header', groupId: group.id, groupColor: group.color, depth: 0 });
     if (!group.collapsed) {
-      groupTasks.forEach(task => sidebarRows.push({ type: 'task', task, groupId: group.id, groupColor: group.color }));
+      groupTasks.forEach(task => sidebarRows.push({ type: 'task', task, groupId: group.id, groupColor: group.color, depth: 1 }));
       for (const subGroup of subGroups) {
         let subGroupTasks = tasks.filter(t => t.group_id === subGroup.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
         if (hideCompletedInCalendar) {
           subGroupTasks = subGroupTasks.filter(t => t.status !== 'completada');
         }
-        sidebarRows.push({ type: 'group-header', groupId: subGroup.id, groupColor: subGroup.color, isSubGroup: true });
+        sidebarRows.push({ type: 'group-header', groupId: subGroup.id, groupColor: subGroup.color, isSubGroup: true, depth: 1 });
         if (!subGroup.collapsed) {
-          subGroupTasks.forEach(task => sidebarRows.push({ type: 'task', task, groupId: subGroup.id, groupColor: subGroup.color }));
+          subGroupTasks.forEach(task => sidebarRows.push({ type: 'task', task, groupId: subGroup.id, groupColor: subGroup.color, depth: 2 }));
         }
       }
     }
@@ -2079,6 +2079,7 @@ export default function App() {
                 const group = row.groupId ? groups.find(g => g.id === row.groupId) : null;
                 const groupColor = group?.color || '#888';
                 const groupBg = cardBg;
+                const taskPaddingLeft = row.depth && row.depth > 0 ? 24 + (row.depth * 16) : 8;
 
                 return (
                   <div key={task.id} className="flex border-b" style={{ height: ROW_HEIGHT, borderBottom: `1px solid ${isDark ? borderColor : '#9c9c9c'}`, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
@@ -2098,6 +2099,7 @@ export default function App() {
                         transition: 'background-color 0.15s ease, opacity 0.15s ease',
                         zIndex: 20,
                         opacity: reorderDragTaskId === task.id ? 0.4 : 1,
+                        paddingLeft: taskPaddingLeft,
                       }}
                       draggable
                       onDragStart={(e) => handleReorderDragStart(e, task.id)}
