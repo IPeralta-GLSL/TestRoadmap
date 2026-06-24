@@ -1855,7 +1855,7 @@ export default function App() {
                             border: isLinkTarget ? '2px dashed #ff9800' : isInvalid ? '2px solid #f44336' : `1px solid ${darkenColor(bgColor, 0.7)}`,
                             cursor: dragging && dragging.taskId === task.id ? 'grabbing' : linkMode ? 'pointer' : 'grab',
                             zIndex: dragging && dragging.taskId === task.id ? 10 : 2,
-                            opacity: linkMode && !isLinkTarget ? 0.6 : 1,
+                            opacity: linkMode && !isLinkTarget ? 0.6 : task.status === 'completada' ? 0.6 : 1,
                             boxShadow: isInvalid ? '0 0 8px rgba(244, 67, 54, 0.6)' : isHovered ? '0 2px 8px rgba(0,0,0,0.3)' : 'none',
                             transform: isHovered && !(dragging && dragging.taskId === task.id) ? 'scaleY(1.08)' : 'scaleY(1)',
                             transition: 'transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease',
@@ -1877,8 +1877,18 @@ export default function App() {
                           onMouseLeave={() => setHoveredTask(null)}
                           onContextMenu={(e) => handleContextMenu(e, task.id)}
                         >
-                          <div className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none">
-                            <span className="text-[10px] font-bold text-white truncate px-1" style={{ textShadow: '0 1px 2px rgba(0,0,0,0.5)' }}>
+                          <div className="absolute inset-0 flex items-center justify-center overflow-hidden pointer-events-none gap-1 px-1.5">
+                            {task.status === 'completada' && (
+                              <TbCheck size={11} className="text-white flex-shrink-0" style={{ filter: 'drop-shadow(0 1px 1px rgba(0,0,0,0.5))' }} />
+                            )}
+                            <span
+                              className="text-[10px] font-bold text-white truncate"
+                              style={{
+                                textShadow: '0 1px 2px rgba(0,0,0,0.5)',
+                                textDecoration: task.status === 'completada' ? 'line-through' : 'none',
+                                opacity: task.status === 'completada' ? 0.75 : 1
+                              }}
+                            >
                               {task.name}
                             </span>
                           </div>
