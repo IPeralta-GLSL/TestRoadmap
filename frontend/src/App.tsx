@@ -96,6 +96,7 @@ export default function App() {
   const panStartViewStartRef = useRef<Date | null>(null);
   const repeatTimerRef = useRef<any>(null);
   const repeatIntervalRef = useRef<any>(null);
+  const dateInputRef = useRef<HTMLInputElement>(null);
 
   const slideStyle: React.CSSProperties = {
     transform: `translateX(${slideOffset}px)`,
@@ -1637,22 +1638,23 @@ export default function App() {
           <div className="w-px h-4 mx-1" style={{ backgroundColor: borderColor }} />
           <div className="relative flex items-center">
             <button
-              className="px-2.5 py-1 text-xs rounded hover:opacity-80 transition-colors flex items-center gap-1.5 font-medium border"
+              onClick={() => dateInputRef.current?.showPicker()}
+              className="px-2 py-1 text-xs rounded hover:opacity-80 transition-colors flex items-center justify-center font-medium border"
               style={{
                 backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0',
                 color: textPrimary,
                 borderColor: isDark ? '#4a4a4a' : '#d0d0d0',
               }}
+              title="Ir a una fecha específica"
             >
-              <TbCalendar size={14} />
-              <span>{format(viewStart, 'd MMM yyyy', { locale: es })}</span>
+              <TbCalendar size={15} />
             </button>
             <input
               type="date"
+              ref={dateInputRef}
               value={format(viewStart, 'yyyy-MM-dd')}
               onChange={handleDateChange}
-              className="absolute inset-0 opacity-0 cursor-pointer w-full h-full"
-              title="Ir a una fecha específica"
+              className="absolute inset-0 opacity-0 pointer-events-none w-full h-full"
             />
           </div>
         </div>
