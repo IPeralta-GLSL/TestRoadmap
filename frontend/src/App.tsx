@@ -1764,12 +1764,12 @@ export default function App() {
             style={{ minWidth: numDays * dayWidth }}
             onMouseDown={handlePanMouseDown}
           >
-            <div className="h-px" style={{ backgroundColor: isDark ? borderColor : '#b8b8b8' }} />
+            <div className="h-px" style={{ backgroundColor: isDark ? borderColor : '#9c9c9c' }} />
 
-            <div className="flex border-b sticky top-0 z-20" style={{ borderColor: isDark ? borderColor : '#b8b8b8', backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
+            <div className="flex border-b sticky top-0 z-20" style={{ borderColor: isDark ? borderColor : '#9c9c9c', backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
               <div
                 className="flex-shrink-0 border-r sticky left-0 relative"
-                style={{ width: sidebarWidth, borderColor: isDark ? borderColor : '#b8b8b8', backgroundColor: subtleBg, zIndex: 30 }}
+                style={{ width: sidebarWidth, borderColor: isDark ? borderColor : '#9c9c9c', backgroundColor: subtleBg, zIndex: 30 }}
               >
                 <div
                   className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-blue-500/30 active:bg-blue-500/50 z-30 transition-colors"
@@ -1787,10 +1787,10 @@ export default function App() {
               </div>
             </div>
 
-            <div className="flex border-b sticky top-0 z-10" style={{ borderColor: isDark ? borderColor : '#b8b8b8', backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
+            <div className="flex border-b sticky top-0 z-10" style={{ borderColor: isDark ? borderColor : '#9c9c9c', backgroundColor: subtleBg, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}>
               <div
                 className="flex-shrink-0 border-r sticky left-0 relative"
-                style={{ width: sidebarWidth, borderColor: isDark ? borderColor : '#b8b8b8', backgroundColor: subtleBg, zIndex: 25 }}
+                style={{ width: sidebarWidth, borderColor: isDark ? borderColor : '#9c9c9c', backgroundColor: subtleBg, zIndex: 25 }}
               >
                 <div
                   className="absolute right-0 top-0 bottom-0 w-2 cursor-col-resize hover:bg-blue-500/30 active:bg-blue-500/50 z-30 transition-colors"
@@ -1808,13 +1808,13 @@ export default function App() {
                       className="text-center border-r"
                       style={{
                         width: dayWidth,
-                        borderColor: isDark ? borderColor : '#b8b8b8',
+                        borderColor: isDark ? borderColor : '#9c9c9c',
                         backgroundColor: getDayBgColor(day),
                       }}
                       title={holidayName || undefined}
                     >
                       <div className="text-[10px]" style={{ color: holidayName ? (isDark ? '#f87171' : '#b91c1c') : textMuted }}>{dayNames[(dayOfWeek + 6) % 7]}</div>
-                      <div className="h-px my-0.5" style={{ backgroundColor: isDark ? borderColor : '#b8b8b8' }} />
+                      <div className="h-px my-0.5" style={{ backgroundColor: isDark ? borderColor : '#9c9c9c' }} />
                       <div className="text-[10px] font-medium" style={{ color: holidayName ? (isDark ? '#f87171' : '#b91c1c') : undefined }}>{format(day, 'd')}</div>
                     </div>
                   );
@@ -1835,7 +1835,7 @@ export default function App() {
                       className="flex border-b"
                       style={{
                         height: GROUP_HEADER_HEIGHT,
-                        borderBottom: `1px solid ${isDark ? borderColor : '#b8b8b8'}`,
+                        borderBottom: `1px solid ${isDark ? borderColor : '#9c9c9c'}`,
                         backgroundColor: sidebarDragHighlight(group.id) ? hexToRgba(group.color, 0.25) : subtleBg,
                       }}
                       onDragOver={(e) => handleGroupDragOver(e, group.id)}
@@ -1844,7 +1844,7 @@ export default function App() {
                     >
                       <div
                         className="flex-shrink-0 border-r flex items-center px-2 gap-1 sticky left-0 group"
-                        style={{ width: sidebarWidth, borderColor: isDark ? borderColor : '#b8b8b8', borderLeft: `3px solid ${group.color}`, backgroundColor: subtleBg, zIndex: 25 }}
+                        style={{ width: sidebarWidth, borderColor: isDark ? borderColor : '#9c9c9c', borderLeft: `3px solid ${group.color}`, backgroundColor: subtleBg, zIndex: 25 }}
                         onContextMenu={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
@@ -1909,6 +1909,23 @@ export default function App() {
                         </button>
                       </div>
                       <div className="flex-1 relative" style={slideStyle}>
+                        {calendarDays.map((day, i) => {
+                          const dateStr = format(day, 'yyyy-MM-dd');
+                          const holidayName = holidays[dateStr];
+                          return (
+                            <div
+                              key={i}
+                              className="absolute top-0 h-full border-r"
+                              style={{
+                                left: i * dayWidth,
+                                width: dayWidth,
+                                borderColor: isDark ? borderColor : '#9c9c9c',
+                                backgroundColor: getDayBgColor(day),
+                              }}
+                              title={holidayName || undefined}
+                            />
+                          );
+                        })}
                         {group.collapsed && collapsedGroupTasks
                           .filter(ct => !(hideCompletedInCalendar && ct.status === 'completada'))
                           .map(ct => {
@@ -1932,17 +1949,35 @@ export default function App() {
 
                 if (row.type === 'ungrouped-header') {
                   return (
-                    <div key="ungrouped" className="flex border-b" style={{ height: GROUP_HEADER_HEIGHT, borderBottom: `1px solid ${isDark ? borderColor : '#b8b8b8'}` }}>
+                    <div key="ungrouped" className="flex border-b" style={{ height: GROUP_HEADER_HEIGHT, borderBottom: `1px solid ${isDark ? borderColor : '#9c9c9c'}` }}>
                       <div
                         className="flex-shrink-0 border-r flex items-center px-2 sticky left-0"
-                        style={{ width: sidebarWidth, borderColor: isDark ? borderColor : '#b8b8b8', backgroundColor: cardBg, zIndex: 25 }}
+                        style={{ width: sidebarWidth, borderColor: isDark ? borderColor : '#9c9c9c', backgroundColor: cardBg, zIndex: 25 }}
                         onDragOver={(e) => handleGroupDragOver(e, null)}
                         onDrop={(e) => handleGroupDrop(e, null)}
                         onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
                       >
                         <span className="text-[9px] font-semibold" style={{ color: sidebarDragHighlight(null) ? '#4caf50' : textMuted }}>Sin grupo</span>
                       </div>
-                      <div className="flex-1" />
+                      <div className="flex-1 relative" style={slideStyle}>
+                        {calendarDays.map((day, i) => {
+                          const dateStr = format(day, 'yyyy-MM-dd');
+                          const holidayName = holidays[dateStr];
+                          return (
+                            <div
+                              key={i}
+                              className="absolute top-0 h-full border-r"
+                              style={{
+                                left: i * dayWidth,
+                                width: dayWidth,
+                                borderColor: isDark ? borderColor : '#9c9c9c',
+                                backgroundColor: getDayBgColor(day),
+                              }}
+                              title={holidayName || undefined}
+                            />
+                          );
+                        })}
+                      </div>
                     </div>
                   );
                 }
@@ -1976,12 +2011,12 @@ export default function App() {
                 const groupBg = cardBg;
 
                 return (
-                  <div key={task.id} className="flex border-b" style={{ height: ROW_HEIGHT, borderBottom: `1px solid ${isDark ? borderColor : '#b8b8b8'}` }}>
+                  <div key={task.id} className="flex border-b" style={{ height: ROW_HEIGHT, borderBottom: `1px solid ${isDark ? borderColor : '#9c9c9c'}` }}>
                     <div
                       className="flex-shrink-0 border-r flex items-center px-1 gap-1 cursor-pointer sticky left-0"
                       style={{
                         width: sidebarWidth,
-                        borderColor: isDark ? borderColor : '#b8b8b8',
+                        borderColor: isDark ? borderColor : '#9c9c9c',
                         backgroundColor: reorderDropTargetId === task.id
                           ? hexToRgba(bgColor, 0.15)
                           : sidebarDragHighlight(row.groupId ?? null)
@@ -2033,7 +2068,7 @@ export default function App() {
                             style={{
                               left: i * dayWidth,
                               width: dayWidth,
-                              borderColor,
+                              borderColor: isDark ? borderColor : '#9c9c9c',
                               backgroundColor: getDayBgColor(day),
                             }}
                             title={holidayName || undefined}
