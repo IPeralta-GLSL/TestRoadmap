@@ -1235,14 +1235,20 @@ export default function App() {
 
   const sidebarRows: SidebarRow[] = [];
   for (const group of groups) {
-    const groupTasks = tasks.filter(t => t.group_id === group.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    let groupTasks = tasks.filter(t => t.group_id === group.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    if (hideCompletedInCalendar) {
+      groupTasks = groupTasks.filter(t => t.status !== 'completada');
+    }
     sidebarRows.push({ type: 'group-header', groupId: group.id, groupColor: group.color });
     if (!group.collapsed) {
       groupTasks.forEach(task => sidebarRows.push({ type: 'task', task, groupId: group.id, groupColor: group.color }));
     }
   }
   sidebarRows.push({ type: 'ungrouped-header', groupId: null });
-  const ungroupedTasks = tasks.filter(t => !t.group_id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+  let ungroupedTasks = tasks.filter(t => !t.group_id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+  if (hideCompletedInCalendar) {
+    ungroupedTasks = ungroupedTasks.filter(t => t.status !== 'completada');
+  }
   ungroupedTasks.forEach(task => sidebarRows.push({ type: 'task', task }));
 
   const getTaskRects = () => {
@@ -1785,7 +1791,7 @@ export default function App() {
                 if (row.type === 'group-header') {
                   const group = groups.find(g => g.id === row.groupId);
                   if (!group) return null;
-                  const collapsedGroupTasks = group.collapsed ? tasks.filter(t => t.group_id === group.id) : [];
+                  const collapsedGroupTasks = group.collapsed ? tasks.filter(t => t.group_id === group.id && !(hideCompletedInCalendar && t.status === 'completada')) : [];
 
                   return (
                     <div
