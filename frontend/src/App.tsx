@@ -671,12 +671,12 @@ export default function App() {
     }
   };
 
-  const addGroup = async () => {
+  const addGroup = async (parentId?: number | null) => {
     try {
       await fetch(`${API_URL}/groups`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: 'Nuevo grupo', color: '#607d8b' }),
+        body: JSON.stringify({ name: 'Nuevo grupo', color: '#607d8b', parent_id: parentId ?? null }),
       });
       await fetchGroups();
     } catch (err) {
@@ -1302,10 +1302,14 @@ export default function App() {
     groupId?: number | null;
     groupColor?: string;
     task?: Task;
+    isSubGroup?: boolean;
+    depth?: number;
   }
 
   const sidebarRows: SidebarRow[] = [];
-  for (const group of groups) {
+  const rootGroups = groups.filter(g => !g.parent_id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+  for (const group of rootGroups) {
+    const subGroups = groups.filter(g => g.parent_id === group.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
     let groupTasks = tasks.filter(t => t.group_id === group.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
     if (hideCompletedInCalendar) {
       groupTasks = groupTasks.filter(t => t.status !== 'completada');
@@ -1313,6 +1317,16 @@ export default function App() {
     sidebarRows.push({ type: 'group-header', groupId: group.id, groupColor: group.color });
     if (!group.collapsed) {
       groupTasks.forEach(task => sidebarRows.push({ type: 'task', task, groupId: group.id, groupColor: group.color }));
+      for (const subGroup of subGroups) {
+        let subGroupTasks = tasks.filter(t => t.group_id === subGroup.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+        if (hideCompletedInCalendar) {
+          subGroupTasks = subGroupTasks.filter(t => t.status !== 'completada');
+        }
+        sidebarRows.push({ type: 'group-header', groupId: subGroup.id, groupColor: subGroup.color, isSubGroup: true });
+        if (!subGroup.collapsed) {
+          subGroupTasks.forEach(task => sidebarRows.push({ type: 'task', task, groupId: subGroup.id, groupColor: subGroup.color }));
+        }
+      }
     }
   }
   sidebarRows.push({ type: 'ungrouped-header', groupId: null });
@@ -1899,7 +1913,7 @@ export default function App() {
                     >
                       <div
                         className="flex-shrink-0 border-r flex items-center px-2 gap-1 sticky left-0 group"
-                        style={{ width: sidebarWidth, borderColor: isDark ? borderColor : '#9c9c9c', borderLeft: `3px solid ${group.color}`, backgroundColor: subtleBg, zIndex: 25, transition: 'background-color 0.3s ease, border-color 0.3s ease' }}
+                        style={{ width: sidebarWidth, borderColor: isDark ? borderColor : '#9c9c9c', borderLeft: `3px solid ${group.color}`, backgroundColor: subtleBg, zIndex: 25, transition: 'background-color 0.3s ease, border-color 0.3s ease', paddingLeft: row.isSubGroup ? '24px' : '8px' }}
                         onContextMenu={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
@@ -1985,18 +1999,18 @@ export default function App() {
                           .filter(ct => !(hideCompletedInCalendar && ct.status === 'completada'))
                           .map(ct => {
                             const sIdx = getDayIndex(ct.start_date, viewStart);
-                          const eIdx = getDayIndex(ct.end_date, viewStart);
-                          const dur = eIdx - sIdx;
-                          const ctLeft = sIdx * dayWidth;
-                          const ctWidth = Math.max(dur * dayWidth, dayWidth);
-                          return (
-                            <div
-                              key={`collapsed-bar-${ct.id}`}
-                              className="absolute rounded-[2px]"
-                              style={{ left: ctLeft + 2, width: ctWidth - 4, top: GROUP_HEADER_HEIGHT - 12, height: 8, backgroundColor: ct.color || '#4caf50', opacity: 0.7 }}
-                            />
-                          );
-                        })}
+                            const eIdx = getDayIndex(ct.end_date, viewStart);
+                            const dur = eIdx - sIdx;
+                            const ctLeft = sIdx * dayWidth;
+                            const ctWidth = Math.max(dur * dayWidth, dayWidth);
+                            return (
+                              <div
+                                key={`collapsed-bar-${ct.id}`}
+                                className="absolute rounded-[2px]"
+                                style={{ left: ctLeft + 2, width: ctWidth - 4, top: GROUP_HEADER_HEIGHT - 12, height: 8, backgroundColor: ct.color || '#4caf50', opacity: 0.7 }}
+                              />
+                            );
+                          })}
                       </div>
                     </div>
                   );
@@ -2303,6 +2317,16 @@ export default function App() {
             }}
           >
             <TbPlus size={14} /> Agregar tarea al grupo
+          </button>
+          <button
+            className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+            style={{ color: textPrimary }}
+            onClick={() => {
+              addGroup(groupContextMenu.groupId);
+              setGroupContextMenu(null);
+            }}
+          >
+            <TbFolder size={14} /> Crear subgrupo
           </button>
           <button
             className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"

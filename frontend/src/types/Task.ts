@@ -40,4 +40,5 @@ export interface TaskGroup {
   color: string;
   collapsed: number;
   position: number;
+  parent_id: number | null;
 }

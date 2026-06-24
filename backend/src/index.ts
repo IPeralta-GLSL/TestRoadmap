@@ -51,7 +51,8 @@ db.exec(`
     id INTEGER PRIMARY KEY AUTOINCREMENT,
     name TEXT NOT NULL,
     color TEXT DEFAULT '#607d8b',
-    collapsed INTEGER DEFAULT 0
+    collapsed INTEGER DEFAULT 0,
+    parent_id INTEGER REFERENCES task_groups(id) ON DELETE CASCADE
   )
 `);
 
@@ -120,6 +121,9 @@ const migrateTasks = () => {
   if (!groupColNames.includes('position')) {
     db.exec("ALTER TABLE task_groups ADD COLUMN position INTEGER DEFAULT 0");
   }
+  if (!groupColNames.includes('parent_id')) {
+    db.exec("ALTER TABLE task_groups ADD COLUMN parent_id INTEGER REFERENCES task_groups(id) ON DELETE CASCADE");
+  }
 
   const tables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='task_attachments'").all();
   const groupTables = db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name='task_groups'").all();
@@ -177,9 +181,9 @@ app.get('/api/groups', (_req, res) => {
 
 app.post('/api/groups', (req, res) => {
   try {
-    const { name, color } = req.body;
-    const stmt = db.prepare('INSERT INTO task_groups (name, color) VALUES (?, ?)');
-    const result = stmt.run(name, color || '#607d8b');
+    const { name, color, parent_id } = req.body;
+    const stmt = db.prepare('INSERT INTO task_groups (name, color, parent_id) VALUES (?, ?, ?)');
+    const result = stmt.run(name, color || '#607d8b', parent_id || null);
     const group = db.prepare('SELECT * FROM task_groups WHERE id = ?').get(result.lastInsertRowid);
     io.emit('group-created', group);
     res.status(201).json(group);
@@ -191,14 +195,14 @@ app.post('/api/groups', (req, res) => {
 app.put('/api/groups/:id', (req, res) => {
   try {
     const { id } = req.params;
-    const { name, color, collapsed } = req.body;
+    const { name, color, collapsed, parent_id } = req.body;
     const existing = db.prepare('SELECT * FROM task_groups WHERE id = ?').get(id) as any;
     if (!existing) {
       res.status(404).json({ error: 'Group not found' });
       return;
     }
-    db.prepare('UPDATE task_groups SET name = ?, color = ?, collapsed = ? WHERE id = ?')
-      .run(name ?? existing.name, color ?? existing.color, collapsed ?? existing.collapsed, id);
+    db.prepare('UPDATE task_groups SET name = ?, color = ?, collapsed = ?, parent_id = ? WHERE id = ?')
+      .run(name ?? existing.name, color ?? existing.color, collapsed ?? existing.collapsed, parent_id ?? existing.parent_id, id);
     const group = db.prepare('SELECT * FROM task_groups WHERE id = ?').get(id);
     io.emit('group-updated', group);
     res.json(group);
@@ -210,9 +214,10 @@ app.put('/api/groups/:id', (req, res) => {
 app.delete('/api/groups/:id', (req, res) => {
   try {
     const { id } = req.params;
-    db.prepare('UPDATE tasks SET group_id = NULL WHERE group_id = ?').run(id);
-    db.prepare('DELETE FROM task_groups WHERE id = ?').run(id);
-    io.emit('group-deleted', parseInt(id));
+    const groupId = parseInt(id);
+    db.prepare('UPDATE tasks SET group_id = NULL WHERE group_id = ?').run(groupId);
+    db.prepare('DELETE FROM task_groups WHERE id = ?').run(groupId);
+    io.emit('group-deleted', groupId);
     res.json({ message: 'Group deleted' });
   } catch (error) {
     res.status(500).json({ error: 'Error deleting group' });
@@ -276,7 +281,7 @@ app.post('/api/tasks', (req, res) => {
     try {
       const diff = diffpatch.diff(null, taskWithDeps);
       saveTaskVersion(result.lastInsertRowid as number, 'create', diff, taskWithDeps);
-    } catch (e) {}
+    } catch (e) { }
 
     res.status(201).json(taskWithDeps);
   } catch (error) {
@@ -300,7 +305,7 @@ app.put('/api/tasks/:id', (req, res) => {
       try {
         const diff = diffpatch.diff(before, taskWithDeps);
         saveTaskVersion(parseInt(String(id)), 'update', diff, taskWithDeps);
-      } catch (e) {}
+      } catch (e) { }
     }
 
     res.json(taskWithDeps);
@@ -316,7 +321,7 @@ app.delete('/api/tasks/:id', (req, res) => {
     try {
       const diff = snapshot ? diffpatch.diff(snapshot, null) : null;
       if (snapshot) saveTaskVersion(parseInt(String(id)), 'delete', diff, snapshot);
-    } catch (e) {}
+    } catch (e) { }
     db.prepare('DELETE FROM task_dependencies WHERE task_id = ? OR depends_on_id = ?').run(id, id);
     db.prepare('DELETE FROM tasks WHERE id = ?').run(id);
 
@@ -409,7 +414,7 @@ app.post('/api/tasks/:id/versions/:vid/restore', (req, res) => {
     if (task) {
       try {
         saveTaskVersion(parseInt(String(id)), 'restore', { from_version: vid }, task);
-      } catch (e) {}
+      } catch (e) { }
       io.emit('task-updated', task);
     }
 
@@ -555,10 +560,10 @@ app.post('/api/project/import', (req, res) => {
       db.prepare('DELETE FROM task_groups').run();
 
       const insertGroup = db.prepare(
-        'INSERT INTO task_groups (id, name, color, collapsed, position) VALUES (?, ?, ?, ?, ?)'
+        'INSERT INTO task_groups (id, name, color, collapsed, position, parent_id) VALUES (?, ?, ?, ?, ?, ?)'
       );
       groups.forEach((g: any) => {
-        insertGroup.run(g.id, g.name, g.color || '#607d8b', g.collapsed ?? 0, g.position ?? 0);
+        insertGroup.run(g.id, g.name, g.color || '#607d8b', g.collapsed ?? 0, g.position ?? 0, g.parent_id ?? null);
       });
 
       const insertTask = db.prepare(
