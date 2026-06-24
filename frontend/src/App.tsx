@@ -1900,7 +1900,14 @@ export default function App() {
                 if (row.type === 'group-header') {
                   const group = groups.find(g => g.id === row.groupId);
                   if (!group) return null;
+                  const getGroupTaskCount = (groupId: number): number => {
+                    const directTasks = tasks.filter(t => t.group_id === groupId && !(hideCompletedInCalendar && t.status === 'completada'));
+                    const subGroups = groups.filter(g => g.parent_id === groupId);
+                    const subGroupTasks = subGroups.reduce((acc, sg) => acc + getGroupTaskCount(sg.id), 0);
+                    return directTasks.length + subGroupTasks;
+                  };
                   const collapsedGroupTasks = group.collapsed ? tasks.filter(t => t.group_id === group.id && !(hideCompletedInCalendar && t.status === 'completada')) : [];
+                  const totalTaskCount = getGroupTaskCount(group.id);
 
                   return (
                     <div
@@ -1956,7 +1963,7 @@ export default function App() {
                             {group.name}
                           </span>
                         )}
-                        {group.collapsed && <span className="text-[8px] mr-1" style={{ color: textMuted }}>{collapsedGroupTasks.length}</span>}
+                        <span className="text-[8px] mr-1" style={{ color: textMuted }}>{totalTaskCount}</span>
                         <div className="relative">
                           <button
                             onClick={(e) => {
@@ -1982,16 +1989,18 @@ export default function App() {
                               >
                                 <TbFileText size={14} /> Agregar tarea
                               </button>
-                              <button
-                                className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
-                                style={{ color: textPrimary }}
-                                onClick={() => {
-                                  addGroup(groupQuickAddMenu.groupId);
-                                  setGroupQuickAddMenu(null);
-                                }}
-                              >
-                                <TbFolder size={14} /> Crear subgrupo
-                              </button>
+                              {!group.parent_id && (
+                                <button
+                                  className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+                                  style={{ color: textPrimary }}
+                                  onClick={() => {
+                                    addGroup(groupQuickAddMenu.groupId);
+                                    setGroupQuickAddMenu(null);
+                                  }}
+                                >
+                                  <TbFolder size={14} /> Crear subgrupo
+                                </button>
+                              )}
                             </div>
                           )}
                         </div>
@@ -2352,16 +2361,22 @@ export default function App() {
           >
             <TbPlus size={14} /> Agregar tarea al grupo
           </button>
-          <button
-            className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
-            style={{ color: textPrimary }}
-            onClick={() => {
-              addGroup(groupContextMenu.groupId);
-              setGroupContextMenu(null);
-            }}
-          >
-            <TbFolder size={14} /> Crear subgrupo
-          </button>
+          {(() => {
+            const group = groups.find(g => g.id === groupContextMenu.groupId);
+            if (!group || group.parent_id) return null;
+            return (
+              <button
+                className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+                style={{ color: textPrimary }}
+                onClick={() => {
+                  addGroup(groupContextMenu.groupId);
+                  setGroupContextMenu(null);
+                }}
+              >
+                <TbFolder size={14} /> Crear subgrupo
+              </button>
+            );
+          })()}
           <button
             className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
             style={{ color: textPrimary }}
