@@ -90,12 +90,25 @@ export default function App() {
   const [slideOffset, setSlideOffset] = useState(0);
   const [animateSlide, setAnimateSlide] = useState(false);
 
+  const [isPanning, setIsPanning] = useState(false);
+  const [panStartX, setPanStartX] = useState(0);
+
+  const panStartViewStartRef = useRef<Date | null>(null);
+  const repeatTimerRef = useRef<any>(null);
+  const repeatIntervalRef = useRef<any>(null);
+
   const slideStyle: React.CSSProperties = {
     transform: `translateX(${slideOffset}px)`,
     transition: animateSlide ? 'transform 0.4s cubic-bezier(0.16, 1, 0.3, 1)' : 'none',
   };
 
-  const shiftViewStart = (days: number) => {
+  const shiftViewStart = (days: number, forceNoAnim = false) => {
+    if (forceNoAnim) {
+      setAnimateSlide(false);
+      setSlideOffset(0);
+      setViewStart(prev => addDays(prev, days));
+      return;
+    }
     setAnimateSlide(false);
     setSlideOffset(days * dayWidth);
     setViewStart(prev => addDays(prev, days));
@@ -107,12 +120,12 @@ export default function App() {
     });
   };
 
-  const handlePrevDays = () => {
-    shiftViewStart(-7);
+  const handlePrevDays = (forceNoAnim = false) => {
+    shiftViewStart(-7, forceNoAnim);
   };
 
-  const handleNextDays = () => {
-    shiftViewStart(7);
+  const handleNextDays = (forceNoAnim = false) => {
+    shiftViewStart(7, forceNoAnim);
   };
 
   const handleGoToToday = () => {
@@ -123,6 +136,77 @@ export default function App() {
       shiftViewStart(days);
     }
   };
+
+  const startRepeating = (e: React.MouseEvent | React.TouchEvent, action: (forceNoAnim: boolean) => void) => {
+    e.preventDefault();
+    action(false);
+    stopRepeating();
+    repeatTimerRef.current = setTimeout(() => {
+      repeatIntervalRef.current = setInterval(() => {
+        action(true);
+      }, 150);
+    }, 450);
+  };
+
+  const stopRepeating = () => {
+    if (repeatTimerRef.current) {
+      clearTimeout(repeatTimerRef.current);
+      repeatTimerRef.current = null;
+    }
+    if (repeatIntervalRef.current) {
+      clearInterval(repeatIntervalRef.current);
+      repeatIntervalRef.current = null;
+    }
+  };
+
+  useEffect(() => {
+    return () => stopRepeating();
+  }, []);
+
+  const handlePanMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return;
+    const rect = e.currentTarget.getBoundingClientRect();
+    const clickX = e.clientX - rect.left;
+    if (clickX <= sidebarWidth) return;
+
+    const target = e.target as HTMLElement;
+    if (target.closest('.select-none') || target.closest('button') || target.closest('input') || target.closest('select')) {
+      return;
+    }
+
+    setIsPanning(true);
+    setPanStartX(e.clientX);
+    panStartViewStartRef.current = viewStart;
+    document.body.style.cursor = 'grabbing';
+    document.body.style.userSelect = 'none';
+  };
+
+  useEffect(() => {
+    if (!isPanning || !panStartViewStartRef.current) return;
+
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!panStartViewStartRef.current) return;
+      const dx = e.clientX - panStartX;
+      const daysDelta = -Math.round(dx / dayWidth);
+      if (daysDelta !== 0) {
+        setViewStart(addDays(panStartViewStartRef.current, daysDelta));
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsPanning(false);
+      panStartViewStartRef.current = null;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+    };
+
+    document.addEventListener('mousemove', handleMouseMove);
+    document.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isPanning, panStartX, dayWidth]);
   const [dragging, setDragging] = useState<DragState | null>(null);
   const dragDeltaRef = useRef(0);
   const [dragDelta, setDragDelta] = useState(0);
@@ -253,6 +337,7 @@ export default function App() {
   const [hideCompletedInCalendar, setHideCompletedInCalendar] = useState<boolean>(() => {
     return localStorage.getItem('hideCompletedInCalendar') === 'true';
   });
+
 
   const [history, setHistory] = useState<Task[][]>([[]]);
   const [historyIdx, setHistoryIdx] = useState(0);
@@ -1491,8 +1576,12 @@ export default function App() {
           </button>
           <div className="w-px h-4 mx-1" style={{ backgroundColor: borderColor }} />
           <button
-            onClick={handlePrevDays}
-            className="px-2 py-1 text-xs rounded hover:opacity-80 transition-colors"
+            onMouseDown={(e) => startRepeating(e, handlePrevDays)}
+            onMouseUp={stopRepeating}
+            onMouseLeave={stopRepeating}
+            onTouchStart={(e) => startRepeating(e, handlePrevDays)}
+            onTouchEnd={stopRepeating}
+            className="px-2 py-1 text-xs rounded hover:opacity-80 transition-colors select-none"
             style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0', color: textPrimary }}
             title="Retroceder 7 días"
           >
@@ -1500,15 +1589,19 @@ export default function App() {
           </button>
           <button
             onClick={handleGoToToday}
-            className="px-2.5 py-1 text-[11px] rounded hover:opacity-80 transition-colors font-medium"
+            className="px-2.5 py-1 text-[11px] rounded hover:opacity-80 transition-colors font-medium select-none"
             style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0', color: textPrimary }}
             title="Ir a hoy"
           >
             Hoy
           </button>
           <button
-            onClick={handleNextDays}
-            className="px-2 py-1 text-xs rounded hover:opacity-80 transition-colors"
+            onMouseDown={(e) => startRepeating(e, handleNextDays)}
+            onMouseUp={stopRepeating}
+            onMouseLeave={stopRepeating}
+            onTouchStart={(e) => startRepeating(e, handleNextDays)}
+            onTouchEnd={stopRepeating}
+            className="px-2 py-1 text-xs rounded hover:opacity-80 transition-colors select-none"
             style={{ backgroundColor: isDark ? '#3a3a3a' : '#e0e0e0', color: textPrimary }}
             title="Avanzar 7 días"
           >
@@ -1579,6 +1672,7 @@ export default function App() {
             ref={calendarContainerRef}
             className="relative"
             style={{ minWidth: numDays * dayWidth }}
+            onMouseDown={handlePanMouseDown}
           >
             <div className="h-px" style={{ backgroundColor: borderColor }} />
 
