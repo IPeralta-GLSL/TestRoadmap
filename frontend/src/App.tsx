@@ -349,7 +349,9 @@ export default function App() {
   const [groupContextMenu, setGroupContextMenu] = useState<{ x: number; y: number; groupId: number } | null>(null);
   const [editingGroupId, setEditingGroupId] = useState<number | null>(null);
   const [groupColorPickerFor, setGroupColorPickerFor] = useState<number | null>(null);
+  const [groupQuickAddMenu, setGroupQuickAddMenu] = useState<{ groupId: number; x: number; y: number } | null>(null);
   const groupContextMenuRef = useRef<HTMLDivElement>(null);
+  const groupQuickAddMenuRef = useRef<HTMLDivElement>(null);
   const [sidebarWidth, setSidebarWidth] = useState(() => {
     return parseInt(localStorage.getItem('roadmapper-sidebar-width') || '192');
   });
@@ -634,6 +636,9 @@ export default function App() {
         setGroupContextMenu(null);
         setGroupColorPickerFor(null);
       }
+      if (groupQuickAddMenu && groupQuickAddMenuRef.current && !groupQuickAddMenuRef.current.contains(e.target as Node)) {
+        setGroupQuickAddMenu(null);
+      }
       if (showAddDropdown && addDropdownRef.current && !addDropdownRef.current.contains(e.target as Node)) {
         setShowAddDropdown(false);
       }
@@ -643,7 +648,7 @@ export default function App() {
     };
     document.addEventListener('mousedown', handleClick);
     return () => document.removeEventListener('mousedown', handleClick);
-  }, [contextMenu, groupContextMenu, showAddDropdown, showProjectDropdown]);
+  }, [contextMenu, groupContextMenu, groupQuickAddMenu, showAddDropdown, showProjectDropdown]);
 
   const addTask = async (groupId?: number | null) => {
     const today = new Date();
@@ -1952,17 +1957,44 @@ export default function App() {
                           </span>
                         )}
                         {group.collapsed && <span className="text-[8px] mr-1" style={{ color: textMuted }}>{collapsedGroupTasks.length}</span>}
-                        <button
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            e.preventDefault();
-                            addTask(group.id);
-                          }}
-                          className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-green-500 p-0.5"
-                          title="Agregar tarea al grupo"
-                        >
-                          <TbPlus size={11} />
-                        </button>
+                        <div className="relative">
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              setGroupQuickAddMenu({ groupId: group.id, x: rect.left, y: rect.bottom });
+                            }}
+                            className="opacity-0 group-hover:opacity-100 transition-opacity text-gray-400 hover:text-green-500 p-0.5"
+                            title="Agregar al grupo"
+                          >
+                            <TbPlus size={11} />
+                          </button>
+                          {groupQuickAddMenu && groupQuickAddMenu.groupId === group.id && (
+                            <div ref={groupQuickAddMenuRef} className="fixed z-50 border rounded-lg shadow-xl py-1 min-w-[180px] anim-context-menu" style={{ left: groupQuickAddMenu.x, top: groupQuickAddMenu.y, backgroundColor: cardBg, borderColor }}>
+                              <button
+                                className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+                                style={{ color: textPrimary }}
+                                onClick={() => {
+                                  addTask(groupQuickAddMenu.groupId);
+                                  setGroupQuickAddMenu(null);
+                                }}
+                              >
+                                <TbFileText size={14} /> Agregar tarea
+                              </button>
+                              <button
+                                className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+                                style={{ color: textPrimary }}
+                                onClick={() => {
+                                  addGroup(groupQuickAddMenu.groupId);
+                                  setGroupQuickAddMenu(null);
+                                }}
+                              >
+                                <TbFolder size={14} /> Crear subgrupo
+                              </button>
+                            </div>
+                          )}
+                        </div>
                         <button
                           onClick={(e) => {
                             e.stopPropagation();
