@@ -5,7 +5,7 @@ import { Task, Attachment, TaskGroup } from './types/Task';
 import Viewer3D from './components/Viewer3D';
 import GlobalHistory from './components/GlobalHistory';
 import PresenceIndicator from './components/PresenceIndicator';
-import { addDays, format, parseISO, differenceInDays, startOfWeek, isSameDay } from 'date-fns';
+import { addDays, format, parseISO, differenceInDays, differenceInCalendarDays, startOfWeek, isSameDay } from 'date-fns';
 import { es } from 'date-fns/locale';
 import * as XLSX from 'xlsx';
 
@@ -51,7 +51,7 @@ function getDependencyErrorMessage(task: Task, allTasks: Task[]): string | null 
     if (!depTask) continue;
     const taskStart = parseISO(task.start_date);
     const depEnd = parseISO(depTask.end_date);
-    if (differenceInDays(taskStart, depEnd) < 0) {
+    if (differenceInCalendarDays(taskStart, depEnd) < -1) {
       return `Inicia antes de finalizar "${depTask.name}"`;
     }
   }
