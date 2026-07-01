@@ -1,0 +1,21 @@
+services:
+  backend:
+    build: ./backend
+    container_name: testroadmap-backend
+    ports:
+      - "3001:3001"
+    volumes:
+      - db-data:/app/data
+    environment:
+      - DATABASE_PATH=/app/data/roadmapper.db
+
+  frontend:
+    build: ./frontend
+    container_name: testroadmap-frontend
+    depends_on:
+      - backend
+    ports:
+      - "3000:3000"
+
+volumes:
+  db-data:

@@ -21,7 +21,8 @@ app.use(express.json({ limit: '250mb' }));
 
 app.use(express.static(path.join(__dirname, '../../frontend/dist')));
 
-const db = new Database(path.join(__dirname, '../roadmapper.db'));
+const dbPath = process.env.DATABASE_PATH || path.join(__dirname, '../roadmapper.db');
+const db = new Database(dbPath);
 db.pragma('journal_mode = WAL');
 
 db.exec(`
