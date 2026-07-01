@@ -370,6 +370,18 @@ export default function App() {
   const [hideCompletedInCalendar, setHideCompletedInCalendar] = useState<boolean>(() => {
     return localStorage.getItem('hideCompletedInCalendar') === 'true';
   });
+  const [reorderDragGroupId, setReorderDragGroupId] = useState<number | null>(null);
+  const reorderDragGroupIdRef = useRef<number | null>(null);
+  const [reorderDropTargetGroupId, setReorderDropTargetGroupId] = useState<number | null>(null);
+  const [reorderGroupDropPosition, setReorderGroupDropPosition] = useState<'before' | 'after'>('after');
+  const reorderGroupDropPositionRef = useRef<'before' | 'after'>('after');
+  const [editingTaskName, setEditingTaskName] = useState('');
+  const [editingTaskNotes, setEditingTaskNotes] = useState('');
+  const [editingTaskStart, setEditingTaskStart] = useState('');
+  const [editingTaskEnd, setEditingTaskEnd] = useState('');
+  const [editingTaskStatus, setEditingTaskStatus] = useState('');
+  const [editingTaskColor, setEditingTaskColor] = useState('');
+  const [lastClickedTaskId, setLastClickedTaskId] = useState<number | null>(null);
 
 
   const [history, setHistory] = useState<Task[][]>([[]]);
@@ -405,6 +417,24 @@ export default function App() {
   useEffect(() => { dayWidthRef.current = dayWidth; }, [dayWidth]);
   useEffect(() => { linkModeRef.current = linkMode; }, [linkMode]);
   useEffect(() => { selectedTaskIdsRef.current = selectedTaskIds; }, [selectedTaskIds]);
+
+  const prevDetailModalTaskIdRef = useRef<number | null>(null);
+
+  useEffect(() => {
+    const currentId = detailModal?.taskId ?? null;
+    if (currentId !== null && currentId !== prevDetailModalTaskIdRef.current) {
+      const task = tasks.find(t => t.id === currentId);
+      if (task) {
+        setEditingTaskName(task.name || '');
+        setEditingTaskNotes(task.notes || '');
+        setEditingTaskStart(task.start_date || '');
+        setEditingTaskEnd(task.end_date || '');
+        setEditingTaskStatus(task.status || 'pendiente');
+        setEditingTaskColor(task.color || '#4caf50');
+      }
+    }
+    prevDetailModalTaskIdRef.current = currentId;
+  }, [detailModal, tasks]);
 
   const fetchTasks = useCallback(async () => {
     try {
@@ -478,6 +508,7 @@ export default function App() {
   };
 
   const handleReorderDragOver = (e: React.DragEvent, targetTaskId: number) => {
+    if (reorderDragGroupId !== null) return;
     e.preventDefault();
     e.stopPropagation();
     e.dataTransfer.dropEffect = 'move';
@@ -537,6 +568,124 @@ export default function App() {
     const ids = groupTasks.map(t => t.id);
     [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
     await reorderTasks(task.group_id, ids);
+  };
+
+  const moveGroupUp = async (groupId: number) => {
+    const group = groups.find(g => g.id === groupId);
+    if (!group) return;
+    const siblingGroups = groups
+      .filter(g => g.parent_id === group.parent_id)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const idx = siblingGroups.findIndex(g => g.id === groupId);
+    if (idx <= 0) return;
+    const ids = siblingGroups.map(g => g.id);
+    [ids[idx - 1], ids[idx]] = [ids[idx], ids[idx - 1]];
+    try {
+      await fetch(`${API_URL}/groups/reorder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ordered_ids: ids }),
+      });
+      await fetchGroups();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const moveGroupDown = async (groupId: number) => {
+    const group = groups.find(g => g.id === groupId);
+    if (!group) return;
+    const siblingGroups = groups
+      .filter(g => g.parent_id === group.parent_id)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const idx = siblingGroups.findIndex(g => g.id === groupId);
+    if (idx < 0 || idx >= siblingGroups.length - 1) return;
+    const ids = siblingGroups.map(g => g.id);
+    [ids[idx], ids[idx + 1]] = [ids[idx + 1], ids[idx]];
+    try {
+      await fetch(`${API_URL}/groups/reorder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ordered_ids: ids }),
+      });
+      await fetchGroups();
+    } catch (err) {
+      console.error(err);
+    }
+  };
+
+  const handleGroupDragStart = (e: React.DragEvent, groupId: number) => {
+    e.dataTransfer.setData('text/group-reorder', String(groupId));
+    e.dataTransfer.effectAllowed = 'move';
+    reorderDragGroupIdRef.current = groupId;
+    setReorderDragGroupId(groupId);
+    const el = e.currentTarget as HTMLElement;
+    const rect = el.getBoundingClientRect();
+    e.dataTransfer.setDragImage(el, e.clientX - rect.left, e.clientY - rect.top);
+  };
+
+  const handleGroupDragOverForReorder = (e: React.DragEvent, targetGroupId: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    e.dataTransfer.dropEffect = 'move';
+    const rect = e.currentTarget.getBoundingClientRect();
+    const midY = rect.top + rect.height / 2;
+    const pos = e.clientY < midY ? 'before' : 'after';
+    reorderGroupDropPositionRef.current = pos;
+    setReorderDropTargetGroupId(targetGroupId);
+    setReorderGroupDropPosition(pos);
+  };
+
+  const handleGroupDropForReorder = async (e: React.DragEvent, targetGroupId: number) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const draggedId = parseInt(e.dataTransfer.getData('text/group-reorder'));
+    if (!draggedId || draggedId === targetGroupId) {
+      reorderDragGroupIdRef.current = null;
+      setReorderDragGroupId(null);
+      setReorderDropTargetGroupId(null);
+      return;
+    }
+    const draggedGroup = groups.find(g => g.id === draggedId);
+    const targetGroup = groups.find(g => g.id === targetGroupId);
+    if (!draggedGroup || !targetGroup) {
+      reorderDragGroupIdRef.current = null;
+      setReorderDragGroupId(null);
+      setReorderDropTargetGroupId(null);
+      return;
+    }
+    if (draggedGroup.parent_id !== targetGroup.parent_id) {
+      reorderDragGroupIdRef.current = null;
+      setReorderDragGroupId(null);
+      setReorderDropTargetGroupId(null);
+      return;
+    }
+    const siblingGroups = groups
+      .filter(g => g.parent_id === targetGroup.parent_id)
+      .sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const ids = siblingGroups.map(g => g.id).filter(id => id !== draggedId);
+    const targetIndex = ids.indexOf(targetGroupId);
+    const insertIndex = reorderGroupDropPositionRef.current === 'before' ? targetIndex : targetIndex + 1;
+    ids.splice(insertIndex, 0, draggedId);
+    try {
+      await fetch(`${API_URL}/groups/reorder`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ordered_ids: ids }),
+      });
+      await fetchGroups();
+    } catch (err) {
+      console.error(err);
+    }
+    reorderDragGroupIdRef.current = null;
+    setReorderDragGroupId(null);
+    setReorderDropTargetGroupId(null);
+  };
+
+  const handleGroupDragEnd = () => {
+    reorderDragGroupIdRef.current = null;
+    setReorderDragGroupId(null);
+    setReorderDropTargetGroupId(null);
   };
 
   const handleGroupDrop = (e: React.DragEvent, groupId: number | null) => {
@@ -1152,6 +1301,66 @@ export default function App() {
     return () => el.removeEventListener('wheel', handleWheel);
   }, [handleWheel]);
 
+  const selectTask = (taskId: number, isShift: boolean, isCtrl: boolean) => {
+    setSelectedTaskIds(prev => {
+      const next = new Set(prev);
+      const rootGroups = groups.filter(g => !g.parent_id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+      const visibleTasks: Task[] = [];
+      for (const group of rootGroups) {
+        const subGroups = groups.filter(g => g.parent_id == group.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+        let groupTasks = tasks.filter(t => t.group_id == group.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+        if (hideCompletedInCalendar) {
+          groupTasks = groupTasks.filter(t => t.status !== 'completada');
+        }
+        if (!group.collapsed) {
+          groupTasks.forEach(task => visibleTasks.push(task));
+          for (const subGroup of subGroups) {
+            let subGroupTasks = tasks.filter(t => t.group_id == subGroup.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+            if (hideCompletedInCalendar) {
+              subGroupTasks = subGroupTasks.filter(t => t.status !== 'completada');
+            }
+            if (!subGroup.collapsed) {
+              subGroupTasks.forEach(task => visibleTasks.push(task));
+            }
+          }
+        }
+      }
+      let ungroupedTasks = tasks.filter(t => !t.group_id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+      if (hideCompletedInCalendar) {
+        ungroupedTasks = ungroupedTasks.filter(t => t.status !== 'completada');
+      }
+      ungroupedTasks.forEach(task => visibleTasks.push(task));
+
+      if (isShift && lastClickedTaskId !== null) {
+        const lastIdx = visibleTasks.findIndex(t => t.id === lastClickedTaskId);
+        const currentIdx = visibleTasks.findIndex(t => t.id === taskId);
+        if (lastIdx !== -1 && currentIdx !== -1) {
+          const start = Math.min(lastIdx, currentIdx);
+          const end = Math.max(lastIdx, currentIdx);
+          const rangeIds = visibleTasks.slice(start, end + 1).map(t => t.id);
+          if (!isCtrl) {
+            next.clear();
+          }
+          rangeIds.forEach(id => next.add(id));
+        } else {
+          if (!isCtrl) next.clear();
+          next.add(taskId);
+        }
+      } else if (isCtrl) {
+        if (next.has(taskId)) {
+          next.delete(taskId);
+        } else {
+          next.add(taskId);
+        }
+      } else {
+        next.clear();
+        next.add(taskId);
+      }
+      return next;
+    });
+    setLastClickedTaskId(taskId);
+  };
+
   const handleMouseDown = (
     e: React.MouseEvent,
     taskId: number,
@@ -1162,23 +1371,19 @@ export default function App() {
     e.stopPropagation();
     e.preventDefault();
 
-    // Shift or Ctrl/Cmd click = toggle selection, don't drag yet
-    if ((e.shiftKey || e.ctrlKey || e.metaKey) && type === 'move') {
-      setSelectedTaskIds(prev => {
-        const next = new Set(prev);
-        if (next.has(taskId)) {
-          next.delete(taskId);
-        } else {
-          next.add(taskId);
-        }
-        return next;
-      });
-      return;
-    }
+    const isShift = e.shiftKey;
+    const isCtrl = e.ctrlKey || e.metaKey;
 
-    // Plain click: if task not in selection, clear selection first
-    if (!selectedTaskIdsRef.current.has(taskId)) {
-      setSelectedTaskIds(new Set());
+    if (isShift || isCtrl) {
+      if (type === 'move') {
+        selectTask(taskId, isShift, isCtrl);
+        return;
+      }
+    } else {
+      if (!selectedTaskIdsRef.current.has(taskId)) {
+        setSelectedTaskIds(new Set([taskId]));
+        setLastClickedTaskId(taskId);
+      }
     }
 
     dragStartRef.current = { x: e.clientX, y: e.clientY, time: Date.now(), button: e.button };
@@ -1212,6 +1417,9 @@ export default function App() {
               addDependency(dragging.taskId, currentLinkMode.fromTaskId);
             }
             setLinkMode(null);
+          } else if (currentSelection.size > 1 && currentSelection.has(dragging.taskId)) {
+            setSelectedTaskIds(new Set([dragging.taskId]));
+            setLastClickedTaskId(dragging.taskId);
           }
         }
       }
@@ -1220,15 +1428,30 @@ export default function App() {
       if (daysDelta !== 0) {
         const task = currentTasks.find((t) => t.id === dragging.taskId);
         if (task) {
-          // If dragging a selected task and there are multiple selected, move all
           const isMultiDrag = currentSelection.size > 1 && currentSelection.has(dragging.taskId) && dragging.type === 'move';
           if (isMultiDrag) {
             const tasksToMove = currentTasks.filter(t => currentSelection.has(t.id));
-            tasksToMove.forEach(t => {
-              const newStart = format(addDays(parseISO(t.start_date), daysDelta), 'yyyy-MM-dd');
-              const newEnd = format(addDays(parseISO(t.end_date), daysDelta), 'yyyy-MM-dd');
-              updateTask(t.id, { start_date: newStart, end_date: newEnd });
-            });
+            const updates = tasksToMove.map(t => ({
+              id: t.id,
+              start_date: format(addDays(parseISO(t.start_date), daysDelta), 'yyyy-MM-dd'),
+              end_date: format(addDays(parseISO(t.end_date), daysDelta), 'yyyy-MM-dd'),
+            }));
+            setTasks(prev => prev.map(t => {
+              const upd = updates.find(u => u.id === t.id);
+              return upd ? { ...t, start_date: upd.start_date, end_date: upd.end_date } : t;
+            }));
+            (async () => {
+              for (const upd of updates) {
+                const original = currentTasks.find(t => t.id === upd.id);
+                if (!original) continue;
+                await fetch(`${API_URL}/tasks/${upd.id}`, {
+                  method: 'PUT',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ ...original, start_date: upd.start_date, end_date: upd.end_date }),
+                });
+              }
+              await fetchTasks();
+            })();
           } else {
             let newStart = dragging.origStart;
             let newEnd = dragging.origEnd;
@@ -1314,8 +1537,8 @@ export default function App() {
   const sidebarRows: SidebarRow[] = [];
   const rootGroups = groups.filter(g => !g.parent_id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
   for (const group of rootGroups) {
-    const subGroups = groups.filter(g => g.parent_id === group.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
-    let groupTasks = tasks.filter(t => t.group_id === group.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    const subGroups = groups.filter(g => g.parent_id == group.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+    let groupTasks = tasks.filter(t => t.group_id == group.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
     if (hideCompletedInCalendar) {
       groupTasks = groupTasks.filter(t => t.status !== 'completada');
     }
@@ -1323,7 +1546,7 @@ export default function App() {
     if (!group.collapsed) {
       groupTasks.forEach(task => sidebarRows.push({ type: 'task', task, groupId: group.id, groupColor: group.color, depth: 1 }));
       for (const subGroup of subGroups) {
-        let subGroupTasks = tasks.filter(t => t.group_id === subGroup.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
+        let subGroupTasks = tasks.filter(t => t.group_id == subGroup.id).sort((a, b) => (a.position ?? 0) - (b.position ?? 0));
         if (hideCompletedInCalendar) {
           subGroupTasks = subGroupTasks.filter(t => t.status !== 'completada');
         }
@@ -1381,8 +1604,6 @@ export default function App() {
       if (row.type === 'task' && row.task?.id === taskId) return y;
       y += row.type === 'task' ? ROW_HEIGHT : GROUP_HEADER_HEIGHT;
     }
-    // If task not found in sidebarRows, it might be in a collapsed group.
-    // Return the Y of the group-header row for that task's group.
     const task = tasks.find(t => t.id === taskId);
     if (task?.group_id) {
       let gy = 0;
@@ -1418,11 +1639,9 @@ export default function App() {
       if (!task.dependencies || task.dependencies.length === 0) return;
       if (hideCompletedInCalendar && task.status === 'completada') return;
 
-      // Check if destination task (task) is visible or in a collapsed group
       const taskRect = rects.find(r => r.task.id === task.id);
       const taskCollapsedRect = !taskRect ? getTaskGroupRect(task) : null;
 
-      // Skip if destination is neither visible nor in a collapsed group
       if (!taskRect && !taskCollapsedRect) return;
 
       const taskY = getTaskY(task.id);
@@ -1439,7 +1658,6 @@ export default function App() {
         let fromY: number;
 
         if (!depRect) {
-          // Source dependency is in a collapsed group
           const collapsedRect = getTaskGroupRect(depTask);
           if (!collapsedRect) return;
           const depY = getTaskY(depId);
@@ -1891,7 +2109,6 @@ export default function App() {
             </div>
 
             <div className="relative" onClick={(e) => {
-              // Clear selection if clicking on the background (not on a task bar)
               if ((e.target as HTMLElement).closest('.select-none') === null) {
                 setSelectedTaskIds(new Set());
               }
@@ -1901,12 +2118,12 @@ export default function App() {
                   const group = groups.find(g => g.id === row.groupId);
                   if (!group) return null;
                   const getGroupTaskCount = (groupId: number): number => {
-                    const directTasks = tasks.filter(t => t.group_id === groupId && !(hideCompletedInCalendar && t.status === 'completada'));
-                    const subGroups = groups.filter(g => g.parent_id === groupId);
+                    const directTasks = tasks.filter(t => t.group_id == groupId && !(hideCompletedInCalendar && t.status === 'completada'));
+                    const subGroups = groups.filter(g => g.parent_id == groupId);
                     const subGroupTasks = subGroups.reduce((acc, sg) => acc + getGroupTaskCount(sg.id), 0);
                     return directTasks.length + subGroupTasks;
                   };
-                  const collapsedGroupTasks = group.collapsed ? tasks.filter(t => t.group_id === group.id && !(hideCompletedInCalendar && t.status === 'completada')) : [];
+                  const collapsedGroupTasks = group.collapsed ? tasks.filter(t => t.group_id == group.id && !(hideCompletedInCalendar && t.status === 'completada')) : [];
                   const totalTaskCount = getGroupTaskCount(group.id);
 
                   return (
@@ -1919,13 +2136,55 @@ export default function App() {
                         backgroundColor: sidebarDragHighlight(group.id) ? hexToRgba(group.color, 0.25) : subtleBg,
                         transition: 'background-color 0.3s ease, border-color 0.3s ease',
                       }}
-                      onDragOver={(e) => handleGroupDragOver(e, group.id)}
-                      onDrop={(e) => handleGroupDrop(e, group.id)}
-                      onDragLeave={() => setSidebarDragOverGroupId('ungrouped')}
+                      onDragOver={(e) => {
+                        if (reorderDragGroupIdRef.current !== null) {
+                          if (group.id !== reorderDragGroupIdRef.current) {
+                            handleGroupDragOverForReorder(e, group.id);
+                          }
+                        } else {
+                          handleGroupDragOver(e, group.id);
+                        }
+                      }}
+                      onDrop={(e) => {
+                        if (reorderDragGroupIdRef.current !== null) {
+                          handleGroupDropForReorder(e, group.id);
+                        } else {
+                          handleGroupDrop(e, group.id);
+                        }
+                      }}
+                      onDragLeave={() => {
+                        setReorderDropTargetGroupId(null);
+                        setSidebarDragOverGroupId('ungrouped');
+                      }}
                     >
                       <div
                         className="flex-shrink-0 border-r flex items-center px-2 gap-1 sticky left-0 group"
-                        style={{ width: sidebarWidth, borderColor: isDark ? borderColor : '#9c9c9c', borderLeft: `3px solid ${group.color}`, backgroundColor: subtleBg, zIndex: 25, transition: 'background-color 0.3s ease, border-color 0.3s ease', paddingLeft: row.isSubGroup ? '24px' : '8px' }}
+                        style={{
+                          width: sidebarWidth,
+                          borderColor: isDark ? borderColor : '#9c9c9c',
+                          borderLeft: `3px solid ${group.color}`,
+                          backgroundColor: subtleBg,
+                          zIndex: 25,
+                          transition: 'background-color 0.3s ease, border-color 0.3s ease',
+                          paddingLeft: row.isSubGroup ? '24px' : '8px',
+                          borderTop: reorderDropTargetGroupId === group.id && reorderGroupDropPosition === 'before' ? '2px solid #2196f3' : undefined,
+                          borderBottom: reorderDropTargetGroupId === group.id && reorderGroupDropPosition === 'after' ? '2px solid #2196f3' : undefined,
+                          opacity: reorderDragGroupId === group.id ? 0.4 : 1,
+                          cursor: 'grab',
+                        }}
+                        draggable
+                        onDragStart={(e) => handleGroupDragStart(e, group.id)}
+                        onDragEnd={handleGroupDragEnd}
+                        onDragOver={(e) => {
+                          if (reorderDragGroupIdRef.current !== null && group.id !== reorderDragGroupIdRef.current) {
+                            handleGroupDragOverForReorder(e, group.id);
+                          }
+                        }}
+                        onDrop={(e) => {
+                          if (reorderDragGroupIdRef.current !== null) {
+                            handleGroupDropForReorder(e, group.id);
+                          }
+                        }}
                         onContextMenu={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
@@ -1933,6 +2192,9 @@ export default function App() {
                           setGroupColorPickerFor(null);
                         }}
                       >
+                        <div className="text-gray-400 p-0.5">
+                          <TbGripVertical size={10} />
+                        </div>
                         <button onClick={() => toggleGroupCollapse(group.id)} style={{ color: textMuted }}>
                           {group.collapsed ? <TbChevronRight size={9} /> : <TbChevronDown size={9} />}
                         </button>
@@ -2099,14 +2361,15 @@ export default function App() {
                 let taskLeft = startIdx * dayWidth;
                 let taskWidth = Math.max(duration * dayWidth, dayWidth);
 
-                if (dragging && dragging.taskId === task.id) {
+                const isSelected = selectedTaskIds.has(task.id);
+                if (dragging && (dragging.taskId === task.id || (isSelected && selectedTaskIds.has(dragging.taskId) && dragging.type === 'move'))) {
                   const daysDelta = Math.round(dragDelta / dayWidth);
                   if (dragging.type === 'move') {
                     taskLeft = startIdx * dayWidth + daysDelta * dayWidth;
-                  } else if (dragging.type === 'resize-left') {
+                  } else if (dragging.type === 'resize-left' && dragging.taskId === task.id) {
                     taskLeft = startIdx * dayWidth + daysDelta * dayWidth;
                     taskWidth = Math.max(taskWidth - daysDelta * dayWidth, dayWidth);
-                  } else if (dragging.type === 'resize-right') {
+                  } else if (dragging.type === 'resize-right' && dragging.taskId === task.id) {
                     taskWidth = Math.max(taskWidth + daysDelta * dayWidth, dayWidth);
                   }
                 }
@@ -2116,7 +2379,6 @@ export default function App() {
                 const isInvalid = hasInvalidDependencies(task);
                 const errorMsg = isInvalid ? getDependencyErrorMessageForTask(task) : null;
                 const isHovered = hoveredTask === task.id;
-                const isSelected = selectedTaskIds.has(task.id);
                 const group = row.groupId ? groups.find(g => g.id === row.groupId) : null;
                 const groupColor = group?.color || '#888';
                 const groupBg = cardBg;
@@ -2129,11 +2391,13 @@ export default function App() {
                       style={{
                         width: sidebarWidth,
                         borderColor: isDark ? borderColor : '#9c9c9c',
-                        backgroundColor: reorderDropTargetId === task.id
-                          ? hexToRgba(bgColor, 0.15)
-                          : sidebarDragHighlight(row.groupId ?? null)
-                            ? hexToRgba(groupColor, 0.25)
-                            : groupBg,
+                        backgroundColor: isSelected
+                          ? (isDark ? '#2a3b5c' : '#dbeafe')
+                          : reorderDropTargetId === task.id
+                            ? hexToRgba(bgColor, 0.15)
+                            : sidebarDragHighlight(row.groupId ?? null)
+                              ? hexToRgba(groupColor, 0.25)
+                              : groupBg,
                         borderLeft: `3px solid ${groupColor}`,
                         borderTop: reorderDropTargetId === task.id && reorderDropPosition === 'before' ? '2px solid #2196f3' : undefined,
                         borderBottom: reorderDropTargetId === task.id && reorderDropPosition === 'after' ? '2px solid #2196f3' : undefined,
@@ -2149,6 +2413,10 @@ export default function App() {
                       onDrop={(e) => handleReorderDrop(e, task.id)}
                       onContextMenu={(e) => handleContextMenu(e, task.id)}
                       onDoubleClick={() => setDetailModal({ taskId: task.id })}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        selectTask(task.id, e.shiftKey, e.ctrlKey || e.metaKey);
+                      }}
                     >
                       <TbGripVertical size={10} className="flex-shrink-0 cursor-grab text-gray-400" />
                       {task.status === 'completada' ? (
@@ -2420,6 +2688,27 @@ export default function App() {
           )}
           <div className="border-t my-1" style={{ borderColor }} />
           <button
+            className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+            style={{ color: textPrimary }}
+            onClick={() => {
+              moveGroupUp(groupContextMenu.groupId);
+              setGroupContextMenu(null);
+            }}
+          >
+            <TbArrowUp size={14} /> Subir grupo
+          </button>
+          <button
+            className="w-full px-4 py-2 text-left text-xs hover:opacity-80 flex items-center gap-2"
+            style={{ color: textPrimary }}
+            onClick={() => {
+              moveGroupDown(groupContextMenu.groupId);
+              setGroupContextMenu(null);
+            }}
+          >
+            <TbArrowDown size={14} /> Bajar grupo
+          </button>
+          <div className="border-t my-1" style={{ borderColor }} />
+          <button
             className="w-full px-4 py-2 text-left text-xs hover:bg-red-50 text-red-500 flex items-center gap-2"
             onClick={() => {
               deleteGroup(groupContextMenu.groupId);
@@ -2461,18 +2750,18 @@ export default function App() {
         return (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 anim-overlay">
             <div className="rounded-xl shadow-2xl w-[420px] max-h-[80vh] overflow-y-auto custom-scrollbar anim-modal" style={{ backgroundColor: cardBg }}>
-              <div className="px-6 py-4 rounded-t-xl flex items-center justify-between" style={{ backgroundColor: hexToRgba(task.color || '#4caf50', 0.15) }}>
-                <h2 className="text-sm font-bold" style={{ color: darkenColor(task.color || '#4caf50', 0.6) }}>Detalles de la tarea</h2>
+              <div className="px-6 py-4 rounded-t-xl flex items-center justify-between" style={{ backgroundColor: hexToRgba(editingTaskColor || '#4caf50', 0.15) }}>
+                <h2 className="text-sm font-bold" style={{ color: darkenColor(editingTaskColor || '#4caf50', 0.6) }}>Detalles de la tarea</h2>
                 <button className="text-lg font-bold" style={{ color: textMuted }} onClick={() => setDetailModal(null)}><TbX size={18} /></button>
               </div>
               <div className="px-6 py-4 space-y-4">
                 <div>
                   <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Nombre</label>
-                  <input className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} defaultValue={task.name} onBlur={(e) => { if (e.target.value !== task.name) updateTask(task.id, { name: e.target.value }); }} onKeyDown={(e) => { if (e.key === 'Enter') (e.target as HTMLInputElement).blur(); }} />
+                  <input className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} value={editingTaskName} onChange={(e) => setEditingTaskName(e.target.value)} />
                 </div>
                 <div ref={dropZoneRef} className={`relative rounded-lg transition-colors ${dragOverTaskId === task.id ? 'bg-blue-50 ring-2 ring-blue-300' : ''}`} onDragEnter={(e) => { e.preventDefault(); setDragOverTaskId(task.id); }} onDragOver={(e) => { e.preventDefault(); setDragOverTaskId(task.id); }} onDragLeave={() => setDragOverTaskId(null)} onDrop={(e) => handleDropZone(e, task.id)}>
                   <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Notas</label>
-                  <textarea className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none min-h-[60px] resize-y" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} defaultValue={task.notes || ''} placeholder="Agregar notas..." onBlur={(e) => updateTask(task.id, { notes: e.target.value })} onPaste={(e) => handlePasteToAttachments(e, task.id)} />
+                  <textarea className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none min-h-[60px] resize-y" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} value={editingTaskNotes} onChange={(e) => setEditingTaskNotes(e.target.value)} placeholder="Agregar notas..." onPaste={(e) => handlePasteToAttachments(e, task.id)} />
                   <div className="flex items-center gap-2 mt-2">
                     <button className="flex items-center gap-1 px-2 py-1 text-[10px] rounded text-gray-600" style={{ backgroundColor: isDark ? '#3a3a3a' : '#f0f0f0' }} onClick={() => handleAttachFile(task.id)}>
                       <TbPaperclip size={12} /> Adjuntar archivo
@@ -2553,16 +2842,16 @@ export default function App() {
                 <div className="grid grid-cols-2 gap-3">
                   <div>
                     <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Inicio</label>
-                    <input type="date" className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} defaultValue={task.start_date} onChange={(e) => updateTask(task.id, { start_date: e.target.value })} />
+                    <input type="date" className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} value={editingTaskStart} onChange={(e) => setEditingTaskStart(e.target.value)} />
                   </div>
                   <div>
                     <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Fin</label>
-                    <input type="date" className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} defaultValue={task.end_date} onChange={(e) => updateTask(task.id, { end_date: e.target.value })} />
+                    <input type="date" className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} value={editingTaskEnd} onChange={(e) => setEditingTaskEnd(e.target.value)} />
                   </div>
                 </div>
                 <div>
                   <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Estado</label>
-                  <select className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} defaultValue={task.status || 'pendiente'} onChange={(e) => updateTask(task.id, { status: e.target.value })}>
+                  <select className="w-full mt-1 px-3 py-2 text-xs border rounded-lg outline-none" style={{ borderColor, backgroundColor: subtleBg, color: textPrimary }} value={editingTaskStatus} onChange={(e) => setEditingTaskStatus(e.target.value)}>
                     {STATUS_OPTIONS.map(s => <option key={s} value={s}>{s.charAt(0).toUpperCase() + s.slice(1)}</option>)}
                   </select>
                 </div>
@@ -2570,7 +2859,7 @@ export default function App() {
                   <label className="text-[10px] font-medium uppercase tracking-wide" style={{ color: textMuted }}>Color</label>
                   <div className="flex gap-2 mt-2 flex-wrap">
                     {PRESET_COLORS.map(color => (
-                      <button key={color} className="w-7 h-7 rounded-full border-2 hover:scale-110 transition-transform" style={{ backgroundColor: color, borderColor: task.color === color ? '#333' : 'transparent' }} onClick={() => updateTask(task.id, { color })} />
+                      <button key={color} className="w-7 h-7 rounded-full border-2 hover:scale-110 transition-transform" style={{ backgroundColor: color, borderColor: editingTaskColor === color ? '#333' : 'transparent' }} onClick={() => setEditingTaskColor(color)} />
                     ))}
                   </div>
                 </div>
@@ -2723,6 +3012,20 @@ export default function App() {
                     )}
                   </div>
                 </div>
+              </div>
+              <div className="px-6 py-3 border-t flex justify-end gap-2" style={{ borderColor }}>
+                <button className="px-4 py-2 text-xs font-semibold rounded-lg hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors" style={{ color: textSecondary }} onClick={() => setDetailModal(null)}>Cancelar</button>
+                <button className="px-4 py-2 text-xs font-semibold rounded-lg text-white transition-colors" style={{ backgroundColor: editingTaskColor || '#4caf50' }} onClick={() => {
+                  updateTask(task.id, {
+                    name: editingTaskName,
+                    notes: editingTaskNotes,
+                    start_date: editingTaskStart,
+                    end_date: editingTaskEnd,
+                    status: editingTaskStatus,
+                    color: editingTaskColor
+                  });
+                  setDetailModal(null);
+                }}>Confirmar</button>
               </div>
             </div>
           </div>
