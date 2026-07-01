@@ -1984,7 +1984,12 @@ export default function App() {
             />
           </div>
         </div>
-        <h1 className="text-base font-semibold tracking-tight">Pipeline de Actividad Semanal</h1>
+        <div className="flex items-center gap-2">
+          <h1 className="text-base font-semibold tracking-tight">Pipeline de Actividad Semanal</h1>
+          <span className="text-[9px] px-1.5 py-0.5 rounded font-mono select-none" style={{ backgroundColor: isDark ? '#2a2a2a' : '#e0e0e0', color: textMuted }} title="Versión de compilación">
+            {import.meta.env.VITE_APP_VERSION || 'dev'}
+          </span>
+        </div>
         <div className="flex items-center gap-2">
           {linkMode && (
             <span className="text-[10px] text-orange-600 bg-orange-100 px-2 py-1 rounded">
